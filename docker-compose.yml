@@ -1,0 +1,17 @@
+services:
+  fdp-sync:
+    build: .
+    container_name: fdp-sync
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist all sync runs / payloads / logs created under SCRIPT_DIR/data
+      - ./data:/app/data
+    # (Optional) health check just to see if the loop is alive
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket, time; time.sleep(0.5)"]
+      interval: 60s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

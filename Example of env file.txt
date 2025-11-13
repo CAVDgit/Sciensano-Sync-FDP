@@ -1,0 +1,97 @@
+# =====================================================================
+#   ENVIRONMENT CONFIGURATION — Synchronisation pipeline between FDPs
+# =====================================================================
+# This file defines all runtime configuration parameters.
+# Every variable is required unless explicitly marked as optional.
+# =====================================================================
+
+
+# ---------------------------------------------------------------------
+# GENERAL BEHAVIOUR
+# ---------------------------------------------------------------------
+
+# Delete metadata on target FDP that have no corresponding link in the source
+# Ensures target stays consistent with source.
+DELETE_ORPHAN_METADATA_ON_TARGET=true
+
+
+# ---------------------------------------------------------------------
+# SOURCE FDP (system from which metadata are harvested)
+# ---------------------------------------------------------------------
+
+# Base URL of the source FAIR Data Point
+URL_SOURCE_FDP=https://source-fdp.example.org
+
+
+# ---------------------------------------------------------------------
+# TARGET FDP (system to which metadata are published)
+# ---------------------------------------------------------------------
+
+# Base URL of the target FAIR Data Point
+URL_TARGET_FDP=https://target-fdp.example.org
+
+# Account used to authenticate on the target FDP (usually a service user)
+LOGIN_TARGET_FDP=...
+
+# Password or API key for the target FDP account
+PASSWORD_TARGET_FDP=...
+
+
+# ---------------------------------------------------------------------
+# SYNCHRONISATION SETTINGS FDP
+# ---------------------------------------------------------------------
+
+# URL of the FDP hosting the technical:Sync class that defines the sync plan and stores the logs generated after each synchronisation
+# This is often the source FDP but can be the target.
+URL_SETTINGS_FDP=https://source-fdp.example.org
+
+# Account used to publish logs to the log FDP
+LOGIN_SETTINGS_FDP=...
+
+# Password or API key for the log FDP account
+PASSWORD_SETTINGS_FDP=...
+
+# Identifier (UUID) of the technical:Sync instance to execute
+SYNC_ID=...
+
+# Number of last logs to keep (older ones will be pruned automatically)
+LAST_LOGS_TO_KEEP=20
+
+
+# ---------------------------------------------------------------------
+# NETWORK & TIMING
+# ---------------------------------------------------------------------
+
+# Default timeout (seconds) for HTTP requests to FDP APIs
+TIMEOUT=15
+
+# Interval (seconds) between checks for manual sync triggers
+# e.g., 600 = check every 10 minutes
+CHECK_FOR_MANUAL_SYNC=600
+
+
+# ---------------------------------------------------------------------
+# NAMESPACES OVERRIDE
+# ---------------------------------------------------------------------
+# Example:
+# NAMESPACES_JSON={"RDF":"http://www.w3.org/1999/02/22-rdf-syntax-ns#","DCAT":"http://www.w3.org/ns/dcat#"}
+
+# ---------------------------------------------------------------------
+# OPTIONAL NAMESPACES OVERRIDE
+# ---------------------------------------------------------------------
+# JSON object defining RDF namespaces if you want to override or extend defaults.
+# Normally you can omit this; it will fall back to the built-in set.
+# Example:
+# NAMESPACES_JSON={"TECHNICAL":"http://technical.fdp/","SYNC":"....}
+NAMESPACES_JSON={"TECHNICAL":"http://technical.fdp/","HEALTHDCATAP":"http://healthdataportal.eu/ns/health#"}
+
+# ---------------------------------------------------------------------
+# SCHEDULING (used by Docker entrypoint.sh)
+# ---------------------------------------------------------------------
+
+# How often (seconds) to run the pipeline automatically.
+# e.g., SYNC_INTERVAL=3600 → run every hour
+SYNC_INTERVAL=3600
+
+# Timezone used inside the container for logs & scheduling
+TZ=Europe/Brussels
