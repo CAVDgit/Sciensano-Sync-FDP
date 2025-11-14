@@ -19,7 +19,7 @@ from pathlib import Path
 import sys
 
 
-def define_sync_settings(URL_SYNC_SETTING_FDP, SYNC_ID):
+def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
     """
     Fetch sync settings only from RDF. No fallback to config here.
 
@@ -53,7 +53,7 @@ def define_sync_settings(URL_SYNC_SETTING_FDP, SYNC_ID):
             "group_by_values": []
         }, 2
 
-    print(f'\n🔄 Starting fetching Sync settings from {URL_SYNC_SETTING_FDP} (sync_id={SYNC_ID})')
+    print(f'\n🔄 Starting fetching Sync settings from {URL_SETTINGS_FDP} (sync_id={SYNC_ID})')
 
     headers = {'Accept': 'text/turtle'}
 
@@ -73,9 +73,9 @@ def define_sync_settings(URL_SYNC_SETTING_FDP, SYNC_ID):
             return None
 
     # Fetch the root sync FDP document.
-    root_g = _fetch_ttl(URL_SYNC_SETTING_FDP)
+    root_g = _fetch_ttl(URL_SETTINGS_FDP)
     if root_g is None:
-        err = f"Error fetching sync settings from {URL_SYNC_SETTING_FDP}."
+        err = f"Error fetching sync settings from {URL_SETTINGS_FDP}."
         print(f"❌ {err}")
         # We cannot continue if the root fails; return error + exit code=2
         return None, SYNC_ID, {
@@ -89,7 +89,7 @@ def define_sync_settings(URL_SYNC_SETTING_FDP, SYNC_ID):
     # Candidates that may contain TECHNICAL:sync resources:
     #   1. the root URL itself
     #   2. any TECHNICAL:sync links mentioned on the FAIRDataPoint root
-    candidates = [URL_SYNC_SETTING_FDP]
+    candidates = [URL_SETTINGS_FDP]
     try:
         for fdp_root in root_g.subjects(RDF.type, FDP.FAIRDataPoint):
             for o in root_g.objects(fdp_root, TECHNICAL.sync):
@@ -143,6 +143,10 @@ def define_sync_settings(URL_SYNC_SETTING_FDP, SYNC_ID):
             override_config_sync_resource = True
             print(f"🔧 Using sync include/skip from {sync_url}")
 
+
+        last_modified_settings = next(g.objects(sync_res, TECHNICAL.modified), None)
+        sync_settings['last_modified_settings'] = str(last_modified_settings)
+
         # --- Extract groupBy property + values if defined ---
 
         # TECHNICAL.groupBy points to the property IRI used for grouping,
@@ -184,7 +188,7 @@ def define_sync_settings(URL_SYNC_SETTING_FDP, SYNC_ID):
 
     # If we never saw any TECHNICAL:sync with the requested SYNC_ID
     if not found_sync_id:
-        err = f"No TECHNICAL.sync with TECHNICAL.syncID='{SYNC_ID}' found under {URL_SYNC_SETTING_FDP}."
+        err = f"No TECHNICAL.sync with TECHNICAL.syncID='{SYNC_ID}' found under {URL_SETTINGS_FDP}."
         print(f"❌ {err}")
         # Return empty lists and an error; non-zero exit code signals failure to caller
         return False, SYNC_ID, {
@@ -214,24 +218,24 @@ def main():
         description="Resolve sync settings from RDF and write JSON (no config fallbacks)."
     )
     ap.add_argument("--out", required=True, help="Path to write sync_settings.json")
-    ap.add_argument("--sync-url", default=None, help="Override URL_SYNC_SETTING_FDP")
+    ap.add_argument("--sync-url", default=None, help="Override URL_SETTINGS_FDP")
     ap.add_argument("--sync-id", default=None, help="Override SYNC_ID")
     args = ap.parse_args()
 
     # Determine sync_url:
     #   1. use --sync-url if provided
-    #   2. else use config.URL_SYNC_SETTING_FDP
+    #   2. else use config.URL_SETTINGS_FDP
     sync_url = None
     if isinstance(args.sync_url, str) and args.sync_url.strip():
         sync_url = args.sync_url.strip()
-    elif hasattr(config, "URL_SYNC_SETTING_FDP") and isinstance(config.URL_SYNC_SETTING_FDP, str):
-        sync_url = config.URL_SYNC_SETTING_FDP.strip() or None
-    elif hasattr(config, "URL_SYNC_SETTING_FDP"):
-        # config.URL_SYNC_SETTING_FDP exists but is not a string
-        raise TypeError("config.URL_SYNC_SETTING_FDP must be a single string URL.")
+    elif hasattr(config, "URL_SETTINGS_FDP") and isinstance(config.URL_SETTINGS_FDP, str):
+        sync_url = config.URL_SETTINGS_FDP.strip() or None
+    elif hasattr(config, "URL_SETTINGS_FDP"):
+        # config.URL_SETTINGS_FDP exists but is not a string
+        raise TypeError("config.URL_SETTINGS_FDP must be a single string URL.")
 
     if not sync_url:
-        print("❌ Missing sync URL (provide --sync-url or set config.URL_SYNC_SETTING_FDP). Aborting.")
+        print("❌ Missing sync URL (provide --sync-url or set config.URL_SETTINGS_FDP). Aborting.")
         sys.exit(1)
 
     # Determine sync_id:
@@ -254,6 +258,7 @@ def main():
         "catalogue_to_skip_in_source": sorted(list(settings.get("catalogue_to_skip_in_source", []))),
         "group_by_property": settings.get("group_by_property"),
         "group_by_values": settings.get("group_by_values", []),
+        "last_modified_settings": settings.get("last_modified_settings")
     }
     if "error" in settings:
         out["error"] = settings["error"]

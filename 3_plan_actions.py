@@ -71,10 +71,12 @@ def load_sync_settings(path: Path) -> dict:
       - "group_by_property": IRI of the group-by property (or None)
       - "group_by_values": list of entries:
           [{ "value_uri": "...", "titleEn": "...", "titleFr": "...", "titleNl": "...", ... }]
+      - "last_modified_settings": ISO datetime string (or None)
     """
     out = {
         "group_by_property": None,
         "group_by_values": [],  # [{value_uri, titleEn, titleFr, titleNl, ...}]
+        "last_modified_settings": None,
     }
     if not path or not path.exists():
         return out
@@ -82,6 +84,7 @@ def load_sync_settings(path: Path) -> dict:
         j = json.loads(path.read_text(encoding="utf-8"))
         out["group_by_property"] = j.get("group_by_property")
         out["group_by_values"] = j.get("group_by_values", []) or []
+        out["last_modified_settings"] = j.get("last_modified_settings")
     except Exception as e:
         print(f"⚠️ Could not read sync settings {path}: {e}")
     return out
@@ -183,6 +186,8 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
     expected_set = {e["value_uri"] for e in expected_entries}
     exp_by_value = {e["value_uri"]: e for e in expected_entries}
 
+    settings_dt = parse_iso_dt(sync_settings.get("last_modified_settings"))
+
     # Normalize 'only_type' filter to lower-case or None
     only_type = (only_type or "").strip().lower() or None
 
@@ -245,6 +250,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
     # -----------------------------
     # B) Ensure expected catalogs exist & deduplicate
     #     - Keep newest by `modified`
+    #     - Force UPDATE if catalog older than last_modified_settings
     # -----------------------------
     canonical_by_value = {}  # value_uri -> kept catalog (or None if to be created)
 
@@ -286,6 +292,55 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                         "parent_target_uri": dup.get("isPartOf"),
                         "action_note": f"Duplicate group-by catalog for {vu}; keeping newest {keep.get('target_uri')}"
                     })
+
+                # NEW: force UPDATE if catalog is older than last_modified_settings
+                if settings_dt:
+                    tgt_dt = parse_iso_dt(keep.get("modified"))
+                    need_update = False
+                    if tgt_dt is None:
+                        need_update = True
+                        reason = "Target catalog has no modified timestamp."
+                    elif settings_dt > tgt_dt:
+                        need_update = True
+                        reason = "Sync settings are newer than target catalog (forced resync)."
+                    else:
+                        reason = ""
+
+                    if need_update:
+                        # Optional time-diff note
+                        time_diff_note = ""
+                        if tgt_dt:
+                            diff = settings_dt - tgt_dt
+                            total_seconds = diff.total_seconds()
+                            days = int(total_seconds // 86400)
+                            hours = int((total_seconds % 86400) // 3600)
+                            minutes = int((total_seconds % 3600) // 60)
+                            if days > 0:
+                                time_diff_note = f" (~{days} day{'s' if days > 1 else ''} newer)"
+                            elif hours > 0:
+                                time_diff_note = f" (~{hours} hour{'s' if hours > 1 else ''} newer)"
+                            elif minutes > 0:
+                                time_diff_note = f" (~{minutes} minute{'s' if minutes > 1 else ''} newer)"
+                            else:
+                                time_diff_note = " (<1 minute difference)"
+
+                        ge = exp_by_value[vu]
+                        titles = _titles_from_group_entry(ge)
+
+                        actions.append({
+                            "action": "update",
+                            "type": "catalog",
+                            "target_uri": keep.get("target_uri"),
+                            "source_uri": None,
+                            "parent_target_uri": keep.get("isPartOf"),
+                            "group_value_uri": vu,
+                            "group_property_iri": group_prop,
+                            "catalogue_title": titles,
+                            "action_note": (
+                                reason if not time_diff_note else f"{reason}{time_diff_note}"
+                            ),
+                        })
+
 
     # Quick lookup for canonical target catalogs (existing ones only, already on target)
     tgt_by_val = {}

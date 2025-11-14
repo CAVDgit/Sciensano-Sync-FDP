@@ -1,3 +1,6 @@
+# NEED FOR CHECK TITLE OF SCIENSANO CATALOGUE
+
+
 #!/usr/bin/env python3
 """
 supervisor.py
@@ -33,16 +36,39 @@ import requests
 import config
 
 
-# ------------- small helpers -------------
 
+SUPERVISOR_DIR = Path(__file__).resolve().parent
+
+# Simple file-based lock to prevent concurrent pipeline runs
+LOCK_PATH = (SUPERVISOR_DIR / "sync_pipeline.lock").resolve()
+
+# ------------- small helpers -------------
 
 def _now() -> str:
     """Return current time as ISO-8601 string with seconds precision."""
     return datetime.now().isoformat(timespec="seconds")
 
 
-# Simple file-based lock to prevent concurrent pipeline runs
-LOCK_PATH = "/tmp/sync_pipeline.lock"
+def clear_stale_lock():
+    """
+    Best-effort cleanup of a stale pipeline lock file.
+
+    Use this once at supervisor startup:
+    - If the previous supervisor/pipeline crashed and left /tmp/sync_pipeline.lock,
+      we clean it so new runs are possible.
+    - If the file does not exist, we just continue.
+    """
+    if not os.path.exists(LOCK_PATH):
+        return
+
+    try:
+        os.remove(LOCK_PATH)
+        print(f"ℹ️  {_now()} Removed stale lock file at {LOCK_PATH}")
+    except OSError as e:
+        # Not fatal: if we can't remove it, sync_pipeline.py will still refuse to run in doubt.
+        print(f"⚠️  {_now()} Could not remove lock file {LOCK_PATH}: {e}")
+
+
 
 
 class PipelineLock:
@@ -332,6 +358,10 @@ def main():
 
     settings_url = args.url or config.URL_SETTINGS_FDP
     sync_id = args.sync_id or config.SYNC_ID
+
+
+    # 🧹 First thing: clear any stale lock left by a crash/restart
+    clear_stale_lock()
 
     # Interval for manual-sync polling (required int in config)
     manual_interval = config.CHECK_FOR_MANUAL_SYNC

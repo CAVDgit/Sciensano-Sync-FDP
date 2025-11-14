@@ -55,9 +55,6 @@ def harvest_role_to_file(
     url: str,
     role: str,
     out_path: str,
-    backup_metadata: bool,
-    max_workers: int = 8,
-    backup_root: str | None = None,
     sync_settings: dict | None = None
 ) -> bool:
     """
@@ -107,8 +104,6 @@ def harvest_fdp(
           "group_by_property": "http://technical.fdp/sciensanoTheme",
           "group_by_values": [...]
         }
-    :param backup_metadata: (future) whether to store local TTL backups (currently unused)
-    :param backup_root: (future) root folder for backups (currently unused)
 
     Returns a summary dict including `metadata` (list of harvested entries).
     """
@@ -197,8 +192,23 @@ def harvest_fdp(
             t for s in catalogueStore.subjects(RDF.type, DCAT.Catalog)
             for t in catalogueStore.objects(s, DCT.title)
         ]
-        catalogTitle_en = next((str(t) for t in catalogTitles if getattr(t, 'language', None) == 'en'), None)
-        catalogTitleDefault = catalogTitle_en or (str(catalogTitles[0]) if catalogTitles else None)
+
+        # Build a language → title dict for this catalogue
+        catalogTitle_map = {}
+
+        for t in catalogueStore.objects(catalogue_uri, DCT.title):
+            if isinstance(t, rdflib.Literal) and t.language in {"en", "fr", "nl"}:
+                catalogTitle_map[t.language] = str(t)
+
+        # --- Compute default title ---
+        if "en" in catalogTitle_map:
+            catalogTitleDefault = catalogTitle_map["en"]
+        else:
+            # first available language among fr, nl
+            catalogTitleDefault = next(
+                (catalogTitle_map[lang] for lang in {"en", "fr", "nl"} if lang in catalogTitle_map),
+                None
+            )
 
         # Capture list of (linked) datasets from the catalogue.
         allDatasets = list(catalogueStore.objects(None, DCAT.dataset))
@@ -277,8 +287,14 @@ def harvest_fdp(
         if role == "target":
             print(f"📁 Catalogue: {catalogTitleDefault} ({len(allDatasets)} datasets)")
 
-            # Last modified of the catalogue: dct:modified or fallback FDP:metadataModified
-            metadataModified = [
+            # Last modified of the catalogue:
+            metadataModified_1 = [
+                str(t)
+                for s in catalogueStore.subjects(RDF.type, DCAT.Catalog)
+                for t in catalogueStore.objects(s, TECHNICAL.modified)
+            ]
+
+            metadataModified_2 = [
                 str(t)
                 for s in catalogueStore.subjects(RDF.type, DCAT.Catalog)
                 for t in catalogueStore.objects(s, DCT.modified)
@@ -286,7 +302,8 @@ def harvest_fdp(
             _vals = list(catalogueStore.objects(None, FDP.metadataModified))
             metadataModified_failback = str(_vals[0]) if _vals else None
 
-            catalogue_lastUpdated = metadataModified[0] if metadataModified else metadataModified_failback
+            catalogue_lastUpdated = metadataModified_1[0] if metadataModified_1 else (metadataModified_2[0] if metadataModified_2 else metadataModified_failback)
+
 
             # GroupBy values for the catalogue, if a group_by_property is defined
             catalogue_groupByValues = []
@@ -301,7 +318,7 @@ def harvest_fdp(
             metadata.append({
                 "target_uri": str(catalogue_uri),
                 "type": "catalog",
-                "title": catalogTitleDefault,
+                "title": catalogTitle_map,
                 "source_uri": None,
                 "modified": catalogue_lastUpdated,
                 "isPartOf": fdpURL,
@@ -342,7 +359,13 @@ def harvest_fdp(
             dataset_uuid = extract_uuid(dataset_uri)
             dataset_filename = f"dataset_{dataset_uuid}.ttl"
 
-            metadataModified = [
+            metadataModified_1 = [
+                str(t)
+                for s in datasetStore.subjects(RDF.type, DCAT.Dataset)
+                for t in datasetStore.objects(s, TECHNICAL.modified)
+            ]
+
+            metadataModified_2 = [
                 str(t)
                 for s in datasetStore.subjects(RDF.type, DCAT.Dataset)
                 for t in datasetStore.objects(s, DCT.modified)
@@ -350,7 +373,7 @@ def harvest_fdp(
             _vals = list(datasetStore.objects(None, FDP.metadataModified))
             metadataModified_failback = str(_vals[0]) if _vals else None
 
-            dataset_lastUpdated = metadataModified[0] if metadataModified else metadataModified_failback
+            dataset_lastUpdated = metadataModified_1[0] if metadataModified_1 else (metadataModified_2[0] if metadataModified_2 else metadataModified_failback)
             dataset_internalURI = sorted({
                 str(notation)
                 for id_node in datasetStore.objects(None, ADMS.identifier)
@@ -433,14 +456,23 @@ def harvest_fdp(
                         subclass_uuid = extract_uuid(subclass_uri)
                         subclass_filename = f"{subclass_type}_{subclass_uuid}.ttl"
 
-                        metadataModified = [
+                        # Last modified of the catalogue:
+                        metadataModified_1 = [
+                            str(t)
+                            for s in subclassStore.subjects(RDF.type, rdf_type)
+                            for t in subclassStore.objects(s, TECHNICAL.modified)
+                        ]
+
+                        metadataModified_2 = [
                             str(t)
                             for s in subclassStore.subjects(RDF.type, rdf_type)
                             for t in subclassStore.objects(s, DCT.modified)
                         ]
                         _vals = list(subclassStore.objects(None, FDP.metadataModified))
                         metadataModified_failback = str(_vals[0]) if _vals else None
-                        subclass_lastUpdated = metadataModified[0] if metadataModified else metadataModified_failback
+
+                        subclass_lastUpdated = metadataModified_1[0] if metadataModified_1 else (metadataModified_2[0] if metadataModified_2 else metadataModified_failback)
+
 
                         subclass_internalURI = sorted({
                             str(notation)
@@ -573,9 +605,6 @@ if __name__ == "__main__":
         getattr(config, "URL_SOURCE_FDP", ""),
         "source",
         str(source_out),
-        backup_metadata=args.backup_metadata,
-        max_workers=args.max_workers,
-        backup_root=backup_root,
         sync_settings={**sync_settings, "group_by_map": group_by_map},  # NOTE: group_by_map currently unused
     )
     print(f"🧾 Wrote: {source_out}  (ok={ok_source})")
@@ -584,9 +613,6 @@ if __name__ == "__main__":
         getattr(config, "URL_TARGET_FDP", ""),
         "target",
         str(target_out),
-        backup_metadata=args.backup_metadata,
-        max_workers=args.max_workers,
-        backup_root=backup_root,
         sync_settings={**sync_settings, "group_by_map": group_by_map},
     )
     print(f"🧾 Wrote: {target_out}  (ok={ok_target})")

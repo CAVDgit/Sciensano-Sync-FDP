@@ -528,33 +528,45 @@ def main():
                     # ---- propagate parent target URI to DIRECT children & patch payload TTLs ----
                     parent_target_uri = a.get("target_uri")
                     parent_type = type_bucket(a.get("type"))
-
-                    def _is_valid_child(parent_type: str, child_type: str) -> bool:
-                        """
-                        Encodes the allowed structural relationships:
-                          - catalog → dataset
-                          - dataset → distribution / sample / analytics
-                        """
-                        if parent_type == "catalog":
-                            return child_type == "dataset"
-                        if parent_type == "dataset":
-                            return child_type in {"distribution", "sample", "analytics"}
-                        return False
+                    parent_source_uri = a.get("source_uri")
+                    parent_group_value = a.get("group_value_uri")
 
                     if parent_target_uri:
                         for child in actions_sorted:
                             if child is a:
                                 continue  # don't treat self as child
 
+                            # Already resolved or not a create/update child → skip
                             if child.get("parent_target_uri") is not None:
-                                continue  # already resolved
+                                continue
 
                             child_type = type_bucket(child.get("type"))
 
-                            # Do not accidentally attach distributions directly under catalogs, etc.
-                            if not _is_valid_child(parent_type, child_type):
+                            # -------- Catalog → Dataset (theme catalogs) --------
+                            if parent_type == "catalog":
+                                # only datasets belong under catalogs
+                                if child_type != "dataset":
+                                    continue
+                                # for group-by catalogs we must match the theme
+                                if not parent_group_value:
+                                    # defensive: a theme catalog SHOULD have group_value_uri
+                                    continue
+                                if child.get("group_value_uri") != parent_group_value:
+                                    continue
+
+                            # -------- Dataset → distribution/sample/analytics --------
+                            elif parent_type == "dataset":
+                                if child_type not in {"distribution", "sample", "analytics"}:
+                                    continue
+                                # only children whose parent_source_uri is this dataset
+                                if child.get("parent_source_uri") != parent_source_uri:
+                                    continue
+
+                            else:
+                                # No other parent relationships are managed here
                                 continue
 
+                            # At this point, this child *logically* belongs to this parent
                             child["parent_target_uri"] = parent_target_uri
                             child["action_delayed"] = False
                             print(
@@ -584,6 +596,7 @@ def main():
                 failed += 0 if ok else 1
                 if args.stop_on_error and not ok:
                     break
+
 
             elif act == "update":
                 if not a.get("target_uri"):

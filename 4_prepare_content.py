@@ -419,16 +419,19 @@ def clean_rdf(class_metadata: str,
                     # New catalogs/datasets should not carry children links
                     continue
                 elif action.lower() == "update":
-                    # Try to re-point child links to the existing target child via mapping
-                    child_in_target = next(
-                        (k for k, v in source_target_mapping.items() if str(o) in v),
-                        None
-                    )
-                    if child_in_target:
-                        o = rdflib.URIRef(child_in_target)
+                    if class_type == DCAT.Catalog:
+                        pass
                     else:
-                        # Unknown child on target; drop the link
-                        continue
+                        # Try to re-point child links to the existing target child via mapping
+                        child_in_target = next(
+                            (k for k, v in source_target_mapping.items() if str(o) in v),
+                            None
+                        )
+                        if child_in_target:
+                            o = rdflib.URIRef(child_in_target)
+                        else:
+                            # Unknown child on target; drop the link
+                            continue
 
         filtered.add((s, p, o))
 
@@ -461,6 +464,7 @@ def clean_rdf(class_metadata: str,
     finalg.add((id_node_iri, SKOS.notation, rdflib.Literal(str(classURI), datatype=XSD.anyURI)))
 
     # technical:modified timestamp (editor-level timestamp)
+    finalg.remove((finalURI, TECHNICAL.modified, None))
     finalg.add((finalURI, TECHNICAL.modified, rdflib.Literal(now_iso, datatype=XSD.dateTime)))
 
     ttl = finalg.serialize(format="turtle")
@@ -545,6 +549,100 @@ def main():
             print(f"   ↳ generated new group-by catalog for {vu}")
             updated_any = True
             continue  # skip normal fetch/clean logic for synthetic catalog
+
+        # --- Update group-by catalogs: reuse clean_rdf and then replace titles from sync settings ---
+        if act == "update" and typ == "catalog" and action.get("group_value_uri"):
+            vu = action["group_value_uri"]
+            titles = action.get("catalogue_title") or {}
+            target_uri = action.get("target_uri")
+
+            if not target_uri:
+                print("   ↳ no target_uri for catalog update, skipping")
+                continue
+
+            # Fetch the current catalog metadata from TARGET FDP
+            ok, raw_ttl, content_type, err = fetch_metadata_with_retries(target_uri)
+            action["content_fetched_at"] = now_iso
+
+            if not ok or not raw_ttl:
+                action["content"] = None
+                action["content_error"] = err or "fetch failed for catalog update"
+                updated_any = True
+                print(f"   ↳ failed to fetch catalog {target_uri} for update: {err}")
+                continue
+
+            try:
+                # Prepare a mapping so clean_rdf keeps the same catalog URI on update
+                mapping_for_clean = dict(source_target_mapping) if source_target_mapping else {}
+                vals = list(mapping_for_clean.get(target_uri, []))
+                if target_uri not in vals:
+                    vals.append(target_uri)
+                mapping_for_clean[target_uri] = vals
+
+                # Expose current action context for isPartOf handling
+                globals()["CURRENT_ACTION_PARENT_TARGET_URI"] = action.get("parent_target_uri")
+                globals()["CURRENT_ACTION_GROUP_VALUE_URI"] = vu
+                globals()["CURRENT_ACTION_GROUP_PROPERTY_IRI"] = action.get("group_property_iri")
+
+                # Reuse clean_rdf to strip FDP/SIO/etc. noise
+                cleaned_ttl, parent_target = clean_rdf(
+                    "catalog",
+                    "update",
+                    raw_ttl,
+                    now_iso,
+                    mapping_for_clean,
+                    target_url,
+                )
+
+                # Cleanup globals to avoid leaking context
+                globals().pop("CURRENT_ACTION_PARENT_TARGET_URI", None)
+                globals().pop("CURRENT_ACTION_GROUP_VALUE_URI", None)
+                globals().pop("CURRENT_ACTION_GROUP_PROPERTY_IRI", None)
+
+                # If clean_rdf resolved a parent on target, keep it on the action
+                if parent_target is not None:
+                    action["parent_target_uri"] = parent_target
+
+                # Now override titles (and refresh TECHNICAL.modified) on the CLEANED graph
+                g = rdflib.Graph()
+                g.parse(data=cleaned_ttl, format="turtle")
+
+                # Find the main catalog resource
+                cats = list(g.subjects(RDF.type, DCAT.Catalog))
+                if cats:
+                    cat_uri = cats[0]
+                else:
+                    cat_uri = rdflib.URIRef(target_uri)
+
+                # Replace all dct:title with the ones from sync settings
+                g.remove((cat_uri, DCT.title, None))
+                for lang, lit in titles.items():
+                    if lit:
+                        g.add((cat_uri, DCT.title, rdflib.Literal(lit, lang=lang)))
+
+                ttl_text = g.serialize(format="turtle")
+
+                if args.inline:
+                    action["content"] = ttl_text
+                    action.pop("content_error", None)
+                else:
+                    fname = _save_ttl_file(ttl_text, str(Path(args.out_dir)), action)
+                    action["content"] = fname
+                    action.pop("content_error", None)
+
+                print(f"   ↳ cleaned and updated group-by catalog titles for {vu}")
+                updated_any = True
+
+            except Exception as e:
+                action["content"] = None
+                action["content_error"] = f"catalog title update failed: {e}"
+                updated_any = True
+                print(f"   ↳ catalog title update failed: {e}")
+
+            # Skip normal source-based fetch/clean logic for this catalog
+            continue
+
+
 
         # --- Regular create/update from SOURCE FDP ---
         if act in {"create", "update"} and source_uri:
