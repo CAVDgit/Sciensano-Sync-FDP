@@ -13,6 +13,8 @@ from typing import Tuple, Optional
 import requests
 import config
 import rdflib
+from pathlib import Path
+import shutil
 
 # -------- Namespaces --------
 # Load namespaces from config and expose them as globals (RDF, DCAT, DCT, TECHNICAL, …)
@@ -229,6 +231,49 @@ def prune_old_logs(keep: int) -> int:
     print(f"✅ Prune complete — kept {kept}, deleted {deleted}.")
     return deleted
 
+def prune_sync_folders(sync_dir: str, keep: int) -> int:
+    """
+    Delete the oldest local sync run folders so that only `keep` remain.
+
+    Expects a base directory containing subfolders named like:
+      YYYY-MM-DD_HH-MM-SS
+
+    Returns: number of folders deleted.
+    """
+    base = Path(sync_dir)
+    if not base.exists() or not base.is_dir():
+        print(f"ℹ️ Sync folder {base} does not exist or is not a directory; skipping local prune.")
+        return 0
+
+    # Only consider subdirectories (each run is a folder)
+    runs = [d for d in base.iterdir() if d.is_dir()]
+    if not runs:
+        print(f"ℹ️ No sync runs to prune in {base}.")
+        return 0
+
+    # Folder names are timestamped like YYYY-MM-DD_HH-MM-SS:
+    # lexicographic order == chronological order, so we can sort by name.
+    runs_sorted = sorted(runs, key=lambda p: p.name, reverse=True)  # newest first
+    to_delete = runs_sorted[keep:]
+
+    if not to_delete:
+        print(f"ℹ️ Nothing to prune in sync folder — total {len(runs_sorted)}, keep {keep}.")
+        return 0
+
+    deleted = 0
+    for folder in to_delete:
+        try:
+            shutil.rmtree(folder)
+            deleted += 1
+            print(f"🗑️  Pruned old sync run folder: {folder}")
+        except Exception as e:
+            print(f"⚠️ Failed to delete sync run folder {folder}: {e}")
+
+    kept = min(keep, len(runs_sorted))
+    print(f"✅ Local sync prune complete — kept {kept}, deleted {deleted}.")
+    return deleted
+
+
 
 # ---------- RDF build ----------
 
@@ -364,7 +409,13 @@ def parse_args():
         default=getattr(config, "LAST_LOGS_TO_KEEP", 10),
         help="How many latest logs to keep when pruning (default from config.LAST_LOGS_TO_KEEP)",
     )
+    ap.add_argument(
+        "--sync-dir",
+        default=None,
+        help="Optional path to local sync runs folder (e.g. data/sync) to prune alongside FDP logs.",
+    )
     return ap.parse_args()
+
 
 
 def main():
@@ -399,7 +450,14 @@ def main():
             keep = max(0, int(args.keep))
             print(f"🧹 Pruning logs: keeping last {keep}")
             prune_old_logs(keep)
+
+            # NEW: also prune local sync folders if provided
+            if args.sync_dir:
+                print(f"🧹 Pruning local sync runs in {args.sync_dir}: keeping last {keep}")
+                prune_sync_folders(args.sync_dir, keep)
+
         return 0
+
     else:
         print(f"⚠️ Created but not published ({code_pub}): state={state}, uri={new_uri}")
         return 1

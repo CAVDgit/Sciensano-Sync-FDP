@@ -221,6 +221,7 @@ def main():
     #   - generate a log dataset from actionsOnTargetFDP.json
     #   - POST it to the logs FDP
     #   - prune old logs to keep only LAST_LOGS_TO_KEEP
+    #   - prune old local sync folders under data/sync
     #
     # Errors here do not abort the pipeline (must_pass=False).
     # ------------------------------------------------------------------
@@ -233,6 +234,7 @@ def main():
             "--status", status,
             "--prune",
             "--keep", str(config.LAST_LOGS_TO_KEEP),
+            "--sync-dir", str(SYNC_BASE),
         ],
         must_pass=False
     )
