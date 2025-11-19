@@ -109,7 +109,7 @@ def _choose_filename(action: dict) -> str:
     if isinstance(fn, str) and fn.strip():
         return fn if fn.endswith(".ttl") else (os.path.splitext(fn)[0] + ".ttl")
 
-    typ = (action.get("type") or "object").lower()
+    typ = (action.get("type") or "object")
 
     # ✅ Handle group-by catalogs (no source_uri, only group_value_uri)
     if not (action.get("source_uri") or "").strip() and action.get("group_value_uri"):
@@ -123,7 +123,7 @@ def _save_ttl_file(ttl_text: str, out_base_dir: str, action: dict) -> str:
     Save TTL text under out_base_dir/<type>/<filename>.ttl and
     return the filename only (not the full path).
     """
-    typ = (action.get("type") or "object").lower()
+    typ = (action.get("type") or "object")
     fname = _choose_filename(action)
     out_dir = os.path.join(out_base_dir, typ)
     os.makedirs(out_dir, exist_ok=True)
@@ -500,7 +500,7 @@ def main():
     # --------- Per-action processing (create/update + synthetic catalogs) ---------
     for action in actions:
         act = (action.get("action") or "").lower()
-        typ = (action.get("type") or "").lower()
+        typ = (action.get("type") or "")
         source_uri = action.get("source_uri")
 
         # If Step 3 attached this dataset to a catalog that is now scheduled for deletion,

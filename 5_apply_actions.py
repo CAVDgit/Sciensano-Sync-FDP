@@ -51,7 +51,6 @@ def type_bucket(t: str) -> str:
       - sort deterministically
       - map them to FDP endpoints (/catalog, /dataset, ...)
     """
-    t = norm(t)
     if t == "catalog": return "catalog"
     if t == "dataset": return "dataset"
     if t == "distribution": return "distribution"
