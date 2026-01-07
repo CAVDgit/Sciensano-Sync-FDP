@@ -12,7 +12,29 @@ This script wires the 6 individual steps together:
   6_save_logs.py             → Publish a log dataset + prune old logs
 
 Each run gets its own timestamped folder under data/sync/<RUN_ID>.
+
+ ---------------------------------------------------------------------------
+
+Publication policy (SOURCE status -> TARGET behavior)
+
+We treat the TARGET as a "sticky public mirror":
+  - PUBLIC  : publish to target (create if missing, update if source is newer)
+  - DRAFT   : do NOT publish changes, but do NOT delete if already published
+  - REVIEW  : same as DRAFT (hold on target; keep last published snapshot)
+  - INTERNAL: remove from target (delete, including any children if applicable)
+
+Rationale:
+  Updating a resource in the source FDP often transitions it to DRAFT/REVIEW
+  until re-approved. We do not want the public target catalogue to "yo-yo"
+  (delete/recreate) during that approval cycle. Only INTERNAL means the
+  resource must no longer be exposed on the public target.
+
+Notes:
+  - Resources missing on source are still cleaned up on target.
+  - Child resources (distribution/sample/analytics) follow the same policy,
+    and are also held when their parent dataset is held.
 """
+
 
 import sys, subprocess
 from pathlib import Path

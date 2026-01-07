@@ -150,6 +150,26 @@ def _postpass_reparent(actions, source_dataset_groups, group_prop):
             a["action_note"] = f"{note} | {suffix}" if note else suffix
 
 
+def norm_status(s: str) -> str:
+    return str(s or "").strip().lower()
+
+# Policy:
+PUBLIC_STATUS = "public"
+# statuses that should NOT be pushed, but should NOT trigger deletion if already on target
+HOLD_STATUSES = {"draft", "review"}
+# statuses that MUST be removed from target
+DELETE_STATUSES = {"internal"}
+
+def should_publish(status: str) -> bool:
+    return norm_status(status) == PUBLIC_STATUS
+
+def should_hold_on_target(status: str) -> bool:
+    return norm_status(status) in HOLD_STATUSES
+
+def should_delete_from_target(status: str) -> bool:
+    return norm_status(status) in DELETE_STATUSES
+
+
 
 # ----------------------------- core: NEW plan_actions -----------------------------
 
@@ -384,11 +404,14 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
             continue
 
         source_all_uris.add(uri)
-        status = str(e.get("status", "")).lower()
-        if status == "public":
+        status = norm_status(e.get("status"))
+        if should_publish(status):
             source_public_by_uri[uri] = e
-        else:
+        elif should_delete_from_target(status):
+            # only INTERNAL triggers deletion on target
             source_not_target_uris.add(uri)
+        # else: draft/review (hold) -> do nothing: do not publish, do not delete
+
 
         # Collect group-by values from Step 2 (accept both keys for robustness)
         gvals = e.get("groupBy") or e.get("groupByValues") or []
@@ -536,7 +559,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                         "target_uri": te.get("target_uri"),
                         "source_uri": v,
                         "parent_target_uri": te.get("isPartOf"),
-                        "action_note": "Source dataset is not public; delete on target."
+                        "action_note": "Source dataset is internal; delete on target."
                     })
                 continue
 
@@ -615,11 +638,13 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
             if parent_uri:
                 child_parent_source[cu] = parent_uri
 
-            status = str(e.get("status","")).lower()
-            if status == "public":
-                source_child_public_by_uri[cu] = e
-            else:
-                source_child_not_target_uris.add(cu)
+                status = norm_status(e.get("status"))
+                if should_publish(status):
+                    source_child_public_by_uri[cu] = e
+                elif should_delete_from_target(status):
+                    source_child_not_target_uris.add(cu)
+                # else draft/review -> hold
+
 
         # --- 4) Plan CREATE/UPDATE for public children, with parent checks/cascade ignore ---
         for cu, se in source_child_public_by_uri.items():
@@ -722,7 +747,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                         "target_uri": te.get("target_uri"),
                         "source_uri": v,
                         "parent_target_uri": te.get("isPartOf"),
-                        "action_note": "Source child is not public; delete on target."
+                        "action_note": "Source child is internal; delete on target."
                     })
                 continue
 
