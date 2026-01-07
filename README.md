@@ -1,95 +1,154 @@
-# FDP Synchronisation Pipeline – Docker Service
-A fully automated synchronisation service between a **source FAIR Data Point (FDP)** and a **target FDP**, including group-by catalogs, metadata reconciliation, payload cleaning, parent–child linking, publishing, orphan pruning, and full audit logging.
+# Sciensano Sync FDP
 
-This repository provides:
+A Dockerized, fully automated synchronisation service between a **source FAIR Data Point (FDP)** and a **target FDP**.
 
-- A complete **6-step RDF synchronisation pipeline** (Python)
-- A **supervisor** process that continuously:
-  - Checks for **manual synchronisation requests** on a dedicated Sync Settings FDP
-  - Runs the full sync pipeline automatically at user-configured intervals
-  - Ensures **no overlapping** sync runs using file locking
-- A Docker environment enabling the service to run continuously and fault-tolerantly
+This software is provided as-is and is intended to support FAIR metadata
+synchronisation workflows. It does not provide any warranty and does not
+replace institutional governance processes.
 
-## Overview
+It supports:
 
-This service keeps a target FDP synchronized with a source FDP by executing the following steps:
+- A **6-step RDF synchronisation pipeline** (Python)
+- **RDF-driven sync configuration** hosted on a dedicated **Sync Settings FDP**
+- Optional **group-by catalogues** (derived catalogues on the target FDP)
+- Parent–child consistency (dataset → distributions/samples/analytics)
+- Optional **orphan cleanup** on the target FDP
+- A published **RDF log dataset** for each run + **retention pruning**
+- A **supervisor** process for:
+  - scheduled runs
+  - manual trigger detection via RDF
+  - file-locking to prevent overlapping executions
 
-1. Resolve sync settings
-2. Harvest metadata from both source and target FDPs  
-3. Plan required actions (create, update, delete)
-4. Prepare & clean metadata payloads
-5. Apply actions on the target FDP (REST publish/update/delete)
-6. Publish a log dataset + prune old logs
+---
 
-The pipeline produces a directory containing:
-- `sourceFDP.json`
-- `targetFDP.json`
-- `actionsOnTargetFDP.json`
-- Cleaned RDF payloads
-- A published log dataset
+## How it works
+
+Each run creates a timestamped folder under:
+
+```
+data/sync/<RUN_ID>/
+```
+
+Where `<RUN_ID>` is `YYYY-MM-DD_HH-MM-SS`.
+
+Artifacts produced per run:
+
+- `syncSettings.json` (resolved from RDF sync settings, Step 1)
+- `sourceFDP.json` (harvested source metadata, Step 2)
+- `targetFDP.json` (harvested target metadata, Step 2)
+- `actionsOnTargetFDP.json` (planned actions, Step 3)
+- `payloads/` (cleaned Turtle payloads, Step 4)
+
+---
+
+## The 6-step pipeline
+
+The orchestrator (`sync_pipeline.py`) runs the following steps:
+
+1. **Resolve sync settings** from RDF (`1_define_sync_settings.py`)
+2. **Harvest** source + target FDPs into JSON (`2_harvest.py`)
+3. **Plan actions** create/update/delete on target (`3_plan_actions.py`)
+4. **Prepare content** TTL payloads (fetch + clean) (`4_prepare_content.py`)
+5. **Apply actions** against target FDP (`5_apply_actions.py`)
+6. **Publish logs** + prune old logs and old local run folders (`6_save_logs.py`)
+
+---
+
+## RDF-driven sync settings (hosted on an FDP)
+
+This service is configured primarily through RDF hosted on a **Sync Settings FDP** (configured via `URL_SETTINGS_FDP`).
+
+The pipeline does **not** hard-code sync scope logic. Instead, at runtime it:
+
+- fetches Turtle from the Sync Settings FDP
+- finds a `technical:sync` resource matching your `SYNC_ID`
+- resolves the settings into `syncSettings.json`
+- uses those settings in Steps 2 and 3
+
+### `technical:sync` resource
+
+A sync configuration is described as an RDF resource with:
+
+- `technical:syncID` (string identifier matched against `SYNC_ID`)
+- optional include / exclude lists for source catalogues:
+  - `technical:resourceToSyncAtSource`
+  - `technical:resourceToSkipAtSource`
+- optional group-by configuration:
+  - `technical:groupBy` → points to the property IRI used for grouping
+  - per-group value nodes may carry:
+    - `rdf:value` (or the same groupBy property)
+    - `technical:titleEn`, `technical:titleFr`, `technical:titleNl`, …
+
+If no include/skip lists are defined in RDF, the pipeline follows an RDF-only policy (no fallback include list).
+
+---
+
+## Publication policy (source status → target behavior)
+
+The pipeline treats the target FDP as a “sticky public mirror”:
+
+- **PUBLIC**: publish to target (create if missing, update if source is newer)
+- **DRAFT**: do not publish changes, do not delete if already published
+- **REVIEW**: same as DRAFT
+- **INTERNAL**: remove from target (delete, including children when applicable)
+
+---
 
 ## Supervisor
 
-The supervisor handles:
+The supervisor runs continuously inside the container and handles:
 
-### 1. Automatic periodic sync  
-Configured via:
+- Scheduled synchronisation (`SYNC_INTERVAL`)
+- Manual sync trigger detection (`CHECK_FOR_MANUAL_SYNC`)
+- Locking to prevent overlapping runs (`/tmp/sync_pipeline.lock`)
+
+---
+
+## Retention & pruning
+
+Retention is controlled by:
+
 ```
-SYNC_INTERVAL
-```
-
-### 2. Detection of manual sync requests  
-Polling interval:
-```
-CHECK_FOR_MANUAL_SYNC
-```
-
-When a `technical:syncRequest` containing the configured SYNC_ID appears in the Sync Settings FDP, it is deleted atomically and the pipeline runs immediately.
-
-### 3. Locking
-A file lock (`/tmp/sync_pipeline.lock`) ensures:
-- No two syncs run simultaneously  
-- Manual sync requests wait until automatic sync finishes (and vice‑versa)
-
-## Environment Configuration
-
-All configuration is done through environment variables.
-
-Required:
-```
-DELETE_ORPHAN_METADATA_ON_TARGET
-URL_SOURCE_FDP
-URL_TARGET_FDP
-LOGIN_TARGET_FDP
-PASSWORD_TARGET_FDP
-
-URL_SETTINGS_FDP
-LOGIN_SETTINGS_FDP
-PASSWORD_SETTINGS_FDP
-SYNC_ID
-
 LAST_LOGS_TO_KEEP
-TIMEOUT
-CHECK_FOR_MANUAL_SYNC
-SYNC_INTERVAL
-NAMESPACES_JSON
 ```
 
-## Docker Usage
+It applies to:
 
-### Dockerfile
-```
-FROM python:3.12-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-ENV PYTHONUNBUFFERED=1
-CMD ["python", "supervisor.py"]
+- published RDF log datasets
+- local sync run folders under `data/sync/`
+
+---
+
+## Configuration (environment variables)
+
+All configuration is provided via environment variables (typically via a `.env` file).
+
+---
+
+## Build & deploy with Docker
+
+### Build image
+
+```bash
+docker build -t sciensano-sync-fdp:latest .
 ```
 
-### docker-compose.yml
+### Run container
+
+```bash
+docker run -d \
+  --name fdp-sync \
+  --restart unless-stopped \
+  --env-file .env \
+  -v "$(pwd)/data:/app/data" \
+  sciensano-sync-fdp:latest
 ```
+
+---
+
+## Docker Compose (recommended)
+
+```yaml
 services:
   fdp-sync:
     build: .
@@ -100,22 +159,19 @@ services:
       - ./data:/app/data
 ```
 
-## Manual Sync Trigger
+Run:
 
-Create an RDF resource containing:
-```
-technical:syncRequest  <request-uri> .
-<request-uri> technical:syncID "my-sync-id" .
+```bash
+docker compose up -d --build
 ```
 
-The supervisor will detect it, delete it, and run the pipeline.
+---
 
-## Logs
+## License
 
-- Available via `docker logs -f fdp-sync`
-- An RDF log dataset is also published automatically
-- Old logs are pruned using:
-```
-LAST_LOGS_TO_KEEP
-```
+This project is licensed under the **Apache License, Version 2.0**.
 
+You are free to use, modify, and distribute this software, including for
+commercial purposes, under the terms of the license.
+
+See the `LICENSE` file for details.
