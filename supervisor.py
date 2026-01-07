@@ -68,6 +68,46 @@ def clear_stale_lock():
         # Not fatal: if we can't remove it, sync_pipeline.py will still refuse to run in doubt.
         print(f"⚠️  {_now()} Could not remove lock file {LOCK_PATH}: {e}")
 
+def _parse_hhmm_list(times: list[str]) -> list[tuple[int, int]]:
+    """
+    Parse ["07:00","12:30"] → [(7,0),(12,30)]
+    Raises ValueError on invalid format.
+    """
+    out = []
+    for t in times:
+        if ":" not in t:
+            raise ValueError(f"Invalid time '{t}' (expected HH:MM)")
+        hh, mm = t.split(":", 1)
+        h = int(hh)
+        m = int(mm)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError(f"Invalid time '{t}' (hour 0-23, minute 0-59)")
+        out.append((h, m))
+    # de-dup + sort
+    out = sorted(set(out))
+    return out
+
+
+def compute_next_scheduled_run(schedule: list[tuple[int, int]], now: datetime | None = None) -> datetime | None:
+    """
+    Given a daily schedule (list of (hour, minute)), return the next datetime to run.
+    Uses local container time (make sure TZ=Europe/Brussels in docker).
+    """
+    if not schedule:
+        return None
+    now = now or datetime.now()
+    today = now.date()
+
+    # Next run today?
+    for h, m in schedule:
+        candidate = datetime(now.year, now.month, now.day, h, m, 0)
+        if candidate > now:
+            return candidate
+
+    # Otherwise first run tomorrow
+    h, m = schedule[0]
+    tomorrow = today + timedelta(days=1)
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, h, m, 0)
 
 
 
@@ -365,27 +405,32 @@ def main():
 
     # Interval for manual-sync polling (required int in config)
     manual_interval = config.CHECK_FOR_MANUAL_SYNC
-    # Interval for automatic pipeline (required int in config)
-    auto_interval = config.SYNC_INTERVAL
 
-    # Interpret SYNC_INTERVAL <= 0 as "automatic sync disabled"
-    if auto_interval <= 0:
-        print(f"ℹ️  {_now()} SYNC_INTERVAL <= 0; automatic sync disabled.")
-        auto_interval = None
+    # Scheduled times for automatic sync (list of "HH:MM")
+    raw_times = getattr(config, "SYNC_SCHEDULE_TIMES", [])
+    try:
+        schedule = _parse_hhmm_list(raw_times)
+    except ValueError as e:
+        print(f"❌ {_now()} Invalid SYNC_SCHEDULE_TIMES: {e}")
+        schedule = []
+
+
+    next_auto_dt = compute_next_scheduled_run(schedule)
 
     print("============================================")
-    print(f"🕹️  Supervisor started at {_now()}")
+    print(f"🕹️  Sciensano Sync FDP Supervisor v{config.VERSION}")
+    print(f"🕒  Started at {_now()}")
     print(f"   Settings FDP URL         : {settings_url}")
     print(f"   syncID                   : {sync_id}")
     print(f"   Manual check interval    : {manual_interval} seconds")
-    print(f"   Automatic sync interval  : {auto_interval if auto_interval else 'DISABLED'}")
-    print("   Lock file                :", LOCK_PATH)
+    print(f"   Automatic sync schedule  : {raw_times if raw_times else 'DISABLED'}")
+    if next_auto_dt:
+        print(f"   Next automatic run       : {next_auto_dt.isoformat(timespec='seconds')}")
+    print(f"   Lock file                : {LOCK_PATH}")
     print("============================================")
 
     # Initialize next tick times
-    now = time.time()
-    next_manual = now + manual_interval
-    next_auto = (now + auto_interval) if auto_interval else None
+    next_manual_ts = time.time() + manual_interval
 
     lock = PipelineLock(LOCK_PATH)
 
@@ -393,7 +438,7 @@ def main():
         now = time.time()
 
         # ---- 1) Manual sync check ----
-        if now >= next_manual:
+        if now >= next_manual_ts:
             print(f"\n⏰ {_now()} Time to check for manual sync requests…")
             with lock as got_lock:
                 if got_lock:
@@ -406,21 +451,23 @@ def main():
                     )
 
             # schedule next manual check
-            next_manual = time.time() + manual_interval
+            next_manual_ts = time.time() + manual_interval
 
-        # ---- 2) Automatic sync run ----
-        if next_auto is not None and now >= next_auto:
-            print(f"\n⏰ {_now()} Time for automatic sync run…")
-            with lock as got_lock:
-                if got_lock:
-                    rc = run_automatic_pipeline()
-                    print(f"ℹ️  {_now()} Automatic sync finished with rc={rc}.")
-                else:
-                    print(
-                        f"⏳ {_now()} Another sync is currently running; automatic run skipped this round."
-                    )
-            # schedule next automatic run
-            next_auto = time.time() + (auto_interval or 0)
+            # ---- 2) Automatic sync run (scheduled times) ----
+            if next_auto_dt is not None and datetime.now() >= next_auto_dt:
+                print(f"\n⏰ {_now()} Time for automatic sync run (scheduled)…")
+                with lock as got_lock:
+                    if got_lock:
+                        rc = run_automatic_pipeline()
+                        print(f"ℹ️  {_now()} Automatic sync finished with rc={rc}.")
+                    else:
+                        print(f"⏳ {_now()} Another sync is currently running; automatic run skipped this round.")
+
+                # Compute next run time (even if skipped due to lock)
+                next_auto_dt = compute_next_scheduled_run(schedule)
+                if next_auto_dt:
+                    print(f"🗓️  {_now()} Next automatic run scheduled at {next_auto_dt.isoformat(timespec='seconds')}")
+
 
         # ---- 3) Sleep a bit to avoid busy loop ----
         time.sleep(1)

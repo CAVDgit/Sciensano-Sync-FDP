@@ -89,9 +89,10 @@ NAMESPACES_JSON={"TECHNICAL":"http://technical.fdp/","HEALTHDCATAP":"http://heal
 # SCHEDULING (used by Docker entrypoint.sh)
 # ---------------------------------------------------------------------
 
-# How often (seconds) to run the pipeline automatically.
-# e.g., SYNC_INTERVAL=3600 → run every hour
-SYNC_INTERVAL=3600
+# Times of day (local time, TZ) when the automatic sync should run.
+# Format: comma-separated HH:MM (24h)
+# Example: 02:15,07:00,12:30,18:45
+SYNC_SCHEDULE_TIMES=07:00,12:30,19:00
 
 # Timezone used inside the container for logs & scheduling
 TZ=Europe/Brussels

@@ -4,16 +4,13 @@ Configuration of the synchronisation tool between a source and a target FDP.
 This version reads all variables from environment variables (.env or docker-compose).
 No hardcoded defaults — the script will raise an error if something required is missing.
 """
+# Global version of the code
+VERSION = "1.0.0"
 
 import os
 import json
 from urllib.parse import urlparse
-
-
-# manual load of .env
-
 from pathlib import Path
-import os
 
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
@@ -69,6 +66,14 @@ def _require_url(name: str) -> str:
         raise RuntimeError(f"{name} must be a valid absolute URL, got: {u!r}")
     return u
 
+def _parse_times_list(s: str | None) -> list[str]:
+    if not s:
+        return []
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    return parts
+
+
+
 
 # ---------- required config variables ----------
 
@@ -88,7 +93,8 @@ PASSWORD_SETTINGS_FDP = _get_env("PASSWORD_SETTINGS_FDP")
 LAST_LOGS_TO_KEEP = _get_int("LAST_LOGS_TO_KEEP")
 TIMEOUT = _get_int("TIMEOUT")
 CHECK_FOR_MANUAL_SYNC = _get_int("CHECK_FOR_MANUAL_SYNC")
-SYNC_INTERVAL = _get_int("SYNC_INTERVAL")
+SYNC_SCHEDULE_TIMES = _parse_times_list(os.getenv("SYNC_SCHEDULE_TIMES", ""))
+
 
 # Default namespaces
 NAMESPACES_DEFAULT = {
@@ -134,6 +140,6 @@ def dump_effective_config(mask_secrets: bool = True):
         "LAST_LOGS_TO_KEEP": LAST_LOGS_TO_KEEP,
         "TIMEOUT": TIMEOUT,
         "CHECK_FOR_MANUAL_SYNC": CHECK_FOR_MANUAL_SYNC,
-        "SYNC_INTERVAL": SYNC_INTERVAL,
+        "SYNC_SCHEDULE_TIMES": SYNC_SCHEDULE_TIMES,
         "NAMESPACES_keys": sorted(list(NAMESPACES)),
     }
