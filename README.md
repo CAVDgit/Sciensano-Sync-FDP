@@ -94,6 +94,37 @@ The pipeline treats the target FDP as a “sticky public mirror”:
 
 ---
 
+## HealthDCAT-AP compliance requirement (dct:conformsTo)
+
+In addition to the publication status policy, this synchronisation service applies a HealthDCAT-AP profile filter for public datasets.
+
+Only datasets that:
+- have status PUBLIC, and
+- have a dct:conformsTo value containing "healthdcat"
+
+are eligible for synchronisation to the target FDP.
+
+How it works
+
+The pipeline reads dct:conformsTo from the CatalogRecord associated with the dataset (not from the dataset resource itself).
+A dataset is considered HealthDCAT-compliant if at least one dct:conformsTo value contains the substring: ```healthdcat```
+
+The match is case-insensitive. For example, the following value is accepted:
+
+```<https://healthdataeu.pages.code.europa.eu/healthdcat-ap/releases/release-6/>```
+
+Behaviour
+
+- PUBLIC datasets without a HealthDCAT-related dct:conformsTo value are not synchronised.
+- PUBLIC datasets that previously conformed but no longer do so may be removed from the target (depending on configuration).
+- DRAFT / REVIEW / INTRANET datasets follow the standard publication policy described above.
+
+This ensures that the target FDP acts as a HealthDCAT-AP public mirror, and does not publish datasets that do not explicitly declare compliance with the HealthDCAT-AP profile.
+
+---
+
+
+
 ## Supervisor
 
 The supervisor runs continuously inside the container and handles:
