@@ -149,16 +149,28 @@ def _postpass_reparent(actions, source_dataset_groups, group_prop):
             suffix = "Reparented: catalog scheduled for deletion"
             a["action_note"] = f"{note} | {suffix}" if note else suffix
 
+def has_healthdcat_conforms_to(entry: dict) -> bool:
+    """
+    True if catalogRecord entry has dct:conformsTo containing 'healthdcat' (case-insensitive).
+    Accepts string or list in entry['conformsTo'].
+    """
+    vals = entry.get("conformsTo") or []
+    if isinstance(vals, str):
+        vals = [vals]
+    return any(isinstance(v, str) and "healthdcat" in v.lower() for v in vals)
+
 
 def norm_status(s: str) -> str:
     return str(s or "").strip().lower()
+
+
 
 # Policy:
 PUBLIC_STATUS = "public"
 # statuses that should NOT be pushed, but should NOT trigger deletion if already on target
 HOLD_STATUSES = {"draft", "review"}
 # statuses that MUST be removed from target
-DELETE_STATUSES = {"internal"}
+DELETE_STATUSES = {"intranet"}
 
 def should_publish(status: str) -> bool:
     return norm_status(status) == PUBLIC_STATUS
@@ -372,18 +384,18 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
     # -----------------------------
     # C) Prepare dataset indexes
     # -----------------------------
-    # Map target datasets by their "internal" source_uri (string or list)
-    target_by_internal = {}
+    # Map target datasets by their "intranet" source_uri (string or list)
+    target_by_intranet = {}
     for e in target:
-        internals = e.get("source_uri")
-        if not internals:
+        intranets = e.get("source_uri")
+        if not intranets:
             continue
-        if isinstance(internals, list):
-            for iu in internals:
+        if isinstance(intranets, list):
+            for iu in intranets:
                 if iu:
-                    target_by_internal[norm(iu)] = e
+                    target_by_intranet[norm(iu)] = e
         else:
-            target_by_internal[norm(internals)] = e
+            target_by_intranet[norm(intranets)] = e
 
     # Build source indexes for datasets:
     #  - source_all_uris: all datasets seen on source (any status)
@@ -406,9 +418,15 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
         source_all_uris.add(uri)
         status = norm_status(e.get("status"))
         if should_publish(status):
-            source_public_by_uri[uri] = e
+            # ✅ NEW: only publish/sync datasets that conform to HealthDCAT-* (substring match)
+            if has_healthdcat_conforms_to(e):
+                source_public_by_uri[uri] = e
+            else:
+                # Not eligible for sync → treat as "hold" (do not create/update, do not delete)
+                pass
+
         elif should_delete_from_target(status):
-            # only INTERNAL triggers deletion on target
+            # only INTRANET triggers deletion on target
             source_not_target_uris.add(uri)
         # else: draft/review (hold) -> do nothing: do not publish, do not delete
 
@@ -440,7 +458,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                 continue
 
             # Lookup existing target dataset for this source_uri (if any)
-            te = target_by_internal.get(uri)
+            te = target_by_intranet.get(uri)
 
             # --- Detect group-by change (source vs target) ---
             if te:
@@ -532,8 +550,8 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
             if str(te.get("type", "")).lower() != "dataset":
                 continue
 
-            internals = te.get("source_uri")
-            if not internals:
+            intranets = te.get("source_uri")
+            if not intranets:
                 # Target dataset with no source mapping → delete if configured
                 if config.DELETE_ORPHAN_METADATA_ON_TARGET:
                     actions.append({
@@ -546,24 +564,24 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                     })
                 continue
 
-            vals = internals if isinstance(internals, list) else [internals]
+            vals = intranets if isinstance(intranets, list) else [intranets]
             vals = [norm(v) for v in vals if v]
 
             # Delete if dataset exists on target but is non-public on source
-            matched_internal = [v for v in vals if v in source_not_target_uris]
-            if matched_internal:
-                for v in matched_internal:
+            matched_intranet = [v for v in vals if v in source_not_target_uris]
+            if matched_intranet:
+                for v in matched_intranet:
                     actions.append({
                         "action": "delete",
                         "type": "dataset",
                         "target_uri": te.get("target_uri"),
                         "source_uri": v,
                         "parent_target_uri": te.get("isPartOf"),
-                        "action_note": "Source dataset is internal; delete on target."
+                        "action_note": "Source dataset is intranet; delete on target."
                     })
                 continue
 
-            # Delete if none of the internals exist on source anymore
+            # Delete if none of the intranets exist on source anymore
             if vals and all(v not in source_all_uris for v in vals):
                 actions.append({
                     "action": "delete",
@@ -602,20 +620,20 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                     target_datasets_by_source[norm(su)] = e
 
         # --- 2) Index target children by their source_uri ---
-        target_child_by_internal = {}
+        target_child_by_intranet = {}
         for e in target:
             t = str(e.get("type","")).lower()
             if t not in ("distribution", "sample", "analytics"):
                 continue
-            internals = e.get("source_uri")
-            if not internals:
+            intranets = e.get("source_uri")
+            if not intranets:
                 continue
-            if isinstance(internals, list):
-                for iu in internals:
+            if isinstance(intranets, list):
+                for iu in intranets:
                     if iu:
-                        target_child_by_internal[norm(iu)] = e
+                        target_child_by_intranet[norm(iu)] = e
             else:
-                target_child_by_internal[norm(internals)] = e
+                target_child_by_intranet[norm(intranets)] = e
 
         # --- 3) Build source child indexes (public/non-public/all) + parent link ---
         source_child_all_uris = set()
@@ -660,7 +678,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                 actions.append({
                     "action": "delete",
                     "type": str(se.get("type")).lower(),
-                    "target_uri": target_child_by_internal.get(cu, {}).get("target_uri"),
+                    "target_uri": target_child_by_intranet.get(cu, {}).get("target_uri"),
                     "source_uri": cu,
                     "parent_target_uri": parent_tgt_uri,
                     "ignored": True,
@@ -683,7 +701,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                 })
                 continue
 
-            te = target_child_by_internal.get(cu)
+            te = target_child_by_intranet.get(cu)
 
             if not te:
                 # CREATE child under the known parent dataset on target
@@ -719,10 +737,10 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
             if tt not in ("distribution", "sample", "analytics"):
                 continue
 
-            internals = te.get("source_uri")
+            intranets = te.get("source_uri")
 
             # Orphan child on target (no mapping) → delete if configured
-            if not internals:
+            if not intranets:
                 if config.DELETE_ORPHAN_METADATA_ON_TARGET:
                     actions.append({
                         "action": "delete",
@@ -734,24 +752,24 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                     })
                 continue
 
-            vals = internals if isinstance(internals, list) else [internals]
+            vals = intranets if isinstance(intranets, list) else [intranets]
             vals = [norm(v) for v in vals if v]
 
-            # If any internal exists but is non-public on source → delete
-            matched_internal = [v for v in vals if v in source_child_not_target_uris]
-            if matched_internal:
-                for v in matched_internal:
+            # If any intranet exists but is non-public on source → delete
+            matched_intranet = [v for v in vals if v in source_child_not_target_uris]
+            if matched_intranet:
+                for v in matched_intranet:
                     actions.append({
                         "action": "delete",
                         "type": tt,
                         "target_uri": te.get("target_uri"),
                         "source_uri": v,
                         "parent_target_uri": te.get("isPartOf"),
-                        "action_note": "Source child is internal; delete on target."
+                        "action_note": "Source child is intranet; delete on target."
                     })
                 continue
 
-            # If none of the internal URIs exist on source anymore → delete
+            # If none of the intranet URIs exist on source anymore → delete
             if vals and all(v not in source_child_all_uris for v in vals):
                 actions.append({
                     "action": "delete",

@@ -90,7 +90,7 @@ The pipeline treats the target FDP as a “sticky public mirror”:
 - **PUBLIC**: publish to target (create if missing, update if source is newer)
 - **DRAFT**: do not publish changes, do not delete if already published
 - **REVIEW**: same as DRAFT
-- **INTERNAL**: remove from target (delete, including children when applicable)
+- **INTRANET**: remove from target (delete, including children when applicable)
 
 ---
 

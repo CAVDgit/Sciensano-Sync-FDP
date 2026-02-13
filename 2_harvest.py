@@ -223,7 +223,7 @@ def harvest_fdp(
             #   ...
             # }
             metadataStatus = defaultdict(lambda: {"dataset": set(), "child": set()})
-
+            recordConformsTo = defaultdict(set)
             # Collect all catalogRecords belonging to this catalogue
             catalogRecords = [
                 str(t)
@@ -249,12 +249,20 @@ def harvest_fdp(
                 #  - TECHNICAL.childfOfPrimaryTopic: distributions/samples/analytics
                 dataset_uris = list(catalogueRecordStore.objects(record_uri, FOAF.primaryTopic))
                 child_uris   = list(catalogueRecordStore.objects(record_uri, TECHNICAL.childfOfPrimaryTopic))
+                record_conforms = {
+                    str(o)
+                    for o in catalogueRecordStore.objects(record_uri, DCT.conformsTo)
+                }
+
 
                 dataset_set = {str(u) for u in dataset_uris}
                 child_set   = {str(u) for u in child_uris}
 
                 for ent in dataset_uris + child_uris:
                     ent_str = str(ent)
+
+                    for c in record_conforms:
+                        recordConformsTo[ent_str].add(c)
 
                     # Decide which bucket to use
                     if ent_str in dataset_set:
@@ -282,6 +290,7 @@ def harvest_fdp(
                 st: {k: sorted(v) for k, v in buckets.items()}
                 for st, buckets in metadataStatus.items()
             }
+            recordConformsTo = {k: sorted(v) for k, v in recordConformsTo.items()}
 
         # ---------- TARGET: collect catalogue-level info (timestamps, groupBy) ----------
         if role == "target":
@@ -359,6 +368,8 @@ def harvest_fdp(
             dataset_uuid = extract_uuid(dataset_uri)
             dataset_filename = f"dataset_{dataset_uuid}.ttl"
 
+            dataset_conformsTo = recordConformsTo.get(dataset_uri, []) if role == "source" else []
+
             metadataModified_1 = [
                 str(t)
                 for s in datasetStore.subjects(RDF.type, DCAT.Dataset)
@@ -374,7 +385,7 @@ def harvest_fdp(
             metadataModified_failback = str(_vals[0]) if _vals else None
 
             dataset_lastUpdated = metadataModified_1[0] if metadataModified_1 else (metadataModified_2[0] if metadataModified_2 else metadataModified_failback)
-            dataset_internalURI = sorted({
+            dataset_intranetURI = sorted({
                 str(notation)
                 for id_node in datasetStore.objects(None, ADMS.identifier)
                 for notation in datasetStore.objects(id_node, SKOS.notation)
@@ -408,13 +419,14 @@ def harvest_fdp(
                     "modified": dataset_lastUpdated,
                     "status": dataset_status,
                     "isPartOf": str(catalogue_uri),
-                    "groupBy": dataset_groupByValues
+                    "groupBy": dataset_groupByValues,
+                    "conformsTo": dataset_conformsTo,
                 })
             elif role == "target":
                 metadata.append({
                     "type": 'dataset',
                     "title": datasetTitleDefault,
-                    "source_uri": dataset_internalURI,
+                    "source_uri": dataset_intranetURI,
                     "target_uri": dataset_uri,
                     "modified": dataset_lastUpdated,
                     "isPartOf": str(catalogue_uri),
@@ -474,7 +486,7 @@ def harvest_fdp(
                         subclass_lastUpdated = metadataModified_1[0] if metadataModified_1 else (metadataModified_2[0] if metadataModified_2 else metadataModified_failback)
 
 
-                        subclass_internalURI = sorted({
+                        subclass_intranetURI = sorted({
                             str(notation)
                             for id_node in subclassStore.objects(None, ADMS.identifier)
                             for notation in subclassStore.objects(id_node, SKOS.notation)
@@ -503,7 +515,7 @@ def harvest_fdp(
                                 "target_uri": subclass_uri,
                                 "type": subclass_type,
                                 "title": subclassTitleDefault,
-                                "source_uri": subclass_internalURI,
+                                "source_uri": subclass_intranetURI,
                                 "modified": subclass_lastUpdated,
                                 "isPartOf": dataset_uri
                             })

@@ -232,7 +232,7 @@ def find_parents_class(fdpURL):
 
 # -------------- RDF cleaning --------------
 
-def clean_rdf(class_metadata: str,
+def prepare_rdf(class_metadata: str,
               action: str,
               ttl_text: str,
               now_iso: str,
@@ -585,7 +585,7 @@ def main():
                 globals()["CURRENT_ACTION_GROUP_PROPERTY_IRI"] = action.get("group_property_iri")
 
                 # Reuse clean_rdf to strip FDP/SIO/etc. noise
-                cleaned_ttl, parent_target = clean_rdf(
+                cleaned_ttl, parent_target = prepare_rdf(
                     "catalog",
                     "update",
                     raw_ttl,
@@ -656,7 +656,7 @@ def main():
                     globals()["CURRENT_ACTION_GROUP_VALUE_URI"] = action.get("group_value_uri")
                     globals()["CURRENT_ACTION_GROUP_PROPERTY_IRI"] = action.get("group_property_iri")
 
-                    cleaned_ttl, parent_target = clean_rdf(
+                    cleaned_ttl, parent_target = prepare_rdf(
                         typ, act, raw_ttl, now_iso, source_target_mapping, target_url
                     )
 

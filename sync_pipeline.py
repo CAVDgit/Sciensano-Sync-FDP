@@ -21,12 +21,12 @@ We treat the TARGET as a "sticky public mirror":
   - PUBLIC  : publish to target (create if missing, update if source is newer)
   - DRAFT   : do NOT publish changes, but do NOT delete if already published
   - REVIEW  : same as DRAFT (hold on target; keep last published snapshot)
-  - INTERNAL: remove from target (delete, including any children if applicable)
+  - INTRANET: remove from target (delete, including any children if applicable)
 
 Rationale:
   Updating a resource in the source FDP often transitions it to DRAFT/REVIEW
   until re-approved. We do not want the public target catalogue to "yo-yo"
-  (delete/recreate) during that approval cycle. Only INTERNAL means the
+  (delete/recreate) during that approval cycle. Only INTRANET means the
   resource must no longer be exposed on the public target.
 
 Notes:
