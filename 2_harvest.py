@@ -48,6 +48,11 @@ def extract_uuid(uri: str):
     m = UUID_RE.search(uri or '')
     return m.group(0).lower() if m else None
 
+def get_ttl_text(uri: str, headers: dict, timeout: int) -> str:
+    res = requests.get(uri, headers=headers, timeout=timeout)
+    res.raise_for_status()
+    # ✅ decode bytes ourselves (don’t trust res.text for Turtle)
+    return res.content.decode("utf-8", errors="replace")
 
 # ------------------------- top-level harvest per role -------------------------
 
@@ -147,8 +152,8 @@ def harvest_fdp(
         return summary
 
     fdpStore = rdflib.Graph()
-    fdpStore.parse(data=res.text, format="turtle")
-
+    fdpStore.parse(data=get_ttl_text(fdpURL, headers, config.TIMEOUT), format="turtle")
+    
     # Retrieve catalogues linked from the FDP root
     allCatalogues = []
     for item in fdpStore.subjects(RDF.type, FDP.FAIRDataPoint):
@@ -181,7 +186,7 @@ def harvest_fdp(
             resCatalogue = requests.get(catalogue_uri, headers=headers, timeout=config.TIMEOUT)
             resCatalogue.raise_for_status()
             catalogueStore = rdflib.Graph()
-            catalogueStore.parse(data=resCatalogue.text, format="turtle")
+            catalogueStore.parse(data=resCatalogue.content.decode("utf-8", errors="replace"), format="turtle")
         except Exception as e:
             print(f"⚠️ Skipping catalogue {catalogue_uri}: {e}")
             summary["errors"].append(f"Catalogue skip {catalogue_uri}: {e}")
@@ -236,7 +241,7 @@ def harvest_fdp(
                     resCatalogueRecord = requests.get(catalogRecord, headers=headers, timeout=config.TIMEOUT)
                     resCatalogueRecord.raise_for_status()
                     catalogueRecordStore = rdflib.Graph()
-                    catalogueRecordStore.parse(data=resCatalogueRecord.text, format="turtle")
+                    catalogueRecordStore.parse(data=resCatalogueRecord.content.decode("utf-8", errors="replace"), format="turtle")
                 except Exception as e:
                     print(f"⚠️ Skipping catalogue record {catalogRecord}: {e}")
                     summary["errors"].append(f"Catalogue record skip {catalogRecord}: {e}")
@@ -350,7 +355,7 @@ def harvest_fdp(
                 resDataset = requests.get(dataset, headers=headers, timeout=config.TIMEOUT)
                 resDataset.raise_for_status()
                 datasetStore = rdflib.Graph()
-                datasetStore.parse(data=resDataset.text, format='turtle')
+                datasetStore.parse(data=resDataset.content.decode("utf-8", errors="replace"), format="turtle")
             except Exception as e:
                 print(f"⚠️ Skipping dataset {dataset}: {e}")
                 summary["errors"].append(f"Dataset skip {dataset}: {e}")
@@ -455,7 +460,7 @@ def harvest_fdp(
                         subRes = requests.get(subclass, headers=headers, timeout=config.TIMEOUT)
                         subRes.raise_for_status()
                         subclassStore = rdflib.Graph()
-                        subclassStore.parse(data=subRes.text, format="turtle")
+                        subclassStore.parse(data=subRes.content.decode("utf-8", errors="replace"), format="turtle")
                         subclass_uri = str(subclass)
 
                         subclassTitles = list(subclassStore.objects(None, DCT.title))

@@ -74,9 +74,13 @@ def fetch_metadata_with_retries(uri: str, token: str = None, retries: int = 3, b
             res = read_metadata(uri, token=token)
             ct = res.headers.get("Content-Type", "text/turtle")
             if res.status_code == 200:
-                return True, res.text, ct, None
+                raw = res.content
+                text = raw.decode("utf-8", errors="replace")  # ✅ force UTF-8
+                return True, text, ct, None
             else:
-                err = f"HTTP {res.status_code} for {uri}: {res.text[:300]}"
+                raw = res.content or b""
+                snippet = raw.decode("utf-8", errors="replace")[:300]
+                err = f"HTTP {res.status_code} for {uri}: {snippet}"
         except Exception as e:
             err = f"Exception for {uri}: {e}"
 
@@ -151,7 +155,7 @@ def find_parents_class(fdpURL):
         return {}
 
     fdpStore = rdflib.Graph()
-    fdpStore.parse(data=res.text, format="turtle")
+    fdpStore.parse(data=res.content.decode("utf-8", errors="replace"), format="turtle")
 
     allCatalogues = []
     for catalogue in fdpStore.subjects(RDF.type, FDP.FAIRDataPoint):
@@ -165,7 +169,7 @@ def find_parents_class(fdpURL):
             resCatalogue = requests.get(catalogue_uri, headers=headers, timeout=config.TIMEOUT)
             resCatalogue.raise_for_status()
             catalogueStore = rdflib.Graph()
-            catalogueStore.parse(data=resCatalogue.text, format="turtle")
+            catalogueStore.parse(data=resCatalogue.content.decode("utf-8", errors="replace"), format="turtle")
         except Exception as e:
             print(f"⚠️ Skipping catalogue {catalogue_uri}: {e}")
             continue
@@ -187,7 +191,7 @@ def find_parents_class(fdpURL):
                 resDataset = requests.get(dataset, headers=headers, timeout=config.TIMEOUT)
                 resDataset.raise_for_status()
                 datasetStore = rdflib.Graph()
-                datasetStore.parse(data=resDataset.text, format='turtle')
+                datasetStore.parse(data=resDataset.content.decode("utf-8", errors="replace"), format="turtle")
             except Exception as e:
                 print(f"⚠️ Skipping dataset {dataset}: {e}")
                 continue
@@ -214,7 +218,7 @@ def find_parents_class(fdpURL):
                         subRes = requests.get(subclass, headers=headers, timeout=config.TIMEOUT)
                         subRes.raise_for_status()
                         subclassStore = rdflib.Graph()
-                        subclassStore.parse(data=subRes.text, format="turtle")
+                        subclassStore.parse(data=subRes.content.decode("utf-8", errors="replace"), format="turtle")
                     except Exception as e:
                         print(f"   ⚠️ Failed {subclass_type} {subclass}: {e}")
                         continue
@@ -467,7 +471,8 @@ def prepare_rdf(class_metadata: str,
     finalg.remove((finalURI, TECHNICAL.modified, None))
     finalg.add((finalURI, TECHNICAL.modified, rdflib.Literal(now_iso, datatype=XSD.dateTime)))
 
-    ttl = finalg.serialize(format="turtle")
+    ttl_bytes = finalg.serialize(format="turtle", encoding="utf-8")
+    ttl = ttl_bytes.decode("utf-8")
     return ttl, resolved_parent_target
 
 # -------------- main ----------------

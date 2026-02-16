@@ -248,7 +248,8 @@ def update_isPartOf_in_rdf(actions_item: dict, payloads_dir: Path) -> bool:
     ttl_path = payloads_dir / typ / actions_item["content"]
 
     try:
-        g.serialize(destination=str(ttl_path), format="turtle")
+        ttl_bytes = g.serialize(format="turtle", encoding="utf-8")  # bytes
+        ttl_path.write_bytes(ttl_bytes)
     except Exception as e:
         print(f"[isPartOf] ERROR: failed to write patched TTL {ttl_path}: {e}")
         return False
