@@ -191,9 +191,9 @@ def prune_old_logs(keep: int) -> int:
             try:
                 dg = rdflib.Graph()
                 dg.parse(data=dt_ttl, format="turtle")
-                created = next((str(o) for o in dg.objects(rdflib.URIRef(du), DCT.created)), None)
+                created = next((str(o) for o in dg.objects(rdflib.URIRef(du), TECHNICAL.created)), None)
                 if not created:
-                    created = next((str(o) for o in dg.objects(rdflib.URIRef(du), TECHNICAL.modified)), None)
+                    created = next((str(o) for o in dg.objects(rdflib.URIRef(du), DCT.modified)), None)
                 created_dt = _parse_iso_dt(created) if created else None
             except Exception:
                 created_dt = None
@@ -315,7 +315,7 @@ def build_log_dataset_ttl(actions_json_path: str, base_iri: str,
     g.add((log_uri, RDF.type, TECHNICAL.Logs))
     g.add((log_uri, DCT.identifier, rdflib.Literal(now_ts)))
     g.add((log_uri, DCT.title, rdflib.Literal(f"sync-{now_ts}")))
-    g.add((log_uri, DCT.created, rdflib.Literal(now_ts, datatype=XSD.dateTime)))
+    g.add((log_uri, TECHNICAL.created, rdflib.Literal(now_ts, datatype=XSD.dateTime)))
     g.add((log_uri, RDFS.label, rdflib.Literal(f"Sync FDP Dataset run {now_ts}")))
 
     # Parent logs catalogue (point to the logs FDP root or dedicated catalogue)

@@ -7,6 +7,7 @@ Step 1: Resolve sync settings from an FDP containing TECHNICAL:sync resources.
 - Extracts:
     * catalogues to sync or skip on the **source**
     * optional group-by property and values
+    * optional TECHNICAL:conformsTo filters (list of profiles/standards URIs)
 
 Outputs a JSON file consumed by later steps in the pipeline.
 """
@@ -17,6 +18,84 @@ import config
 import argparse, json
 from pathlib import Path
 import sys
+import re
+
+_MOJI_MARKERS = ("Ã", "Â", "â€", "â€™", "â€œ", "â€�", "â€“", "â€”", "ï¿½")
+
+def fix_mojibake(s: str) -> str:
+    """
+    Repair common mojibake patterns caused by UTF-8 bytes decoded as latin-1/cp1252.
+
+    Strategy:
+      - If string contains typical mojibake markers, try latin-1 -> utf-8 roundtrip.
+      - If that fails, return original.
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    if not any(m in s for m in _MOJI_MARKERS):
+        return s
+    try:
+        repaired = s.encode("latin-1", errors="strict").decode("utf-8", errors="strict")
+        return repaired
+    except Exception:
+        return s
+
+def deep_fix(obj):
+    """
+    Recursively apply fix_mojibake to strings inside dict/list structures.
+    """
+    if isinstance(obj, str):
+        return fix_mojibake(obj)
+    if isinstance(obj, list):
+        return [deep_fix(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: deep_fix(v) for k, v in obj.items()}
+    return obj
+
+def _decode_response_bytes(r: requests.Response) -> str:
+    """
+    Decode HTTP response bytes into text robustly, preferring declared encoding,
+    then requests guesses, then utf-8. Also apply mojibake repair if needed.
+    """
+    raw = r.content or b""
+
+    # 1) Respect explicit charset if provided
+    enc = None
+    ctype = (r.headers.get("Content-Type") or "")
+    m = re.search(r"charset=([^\s;]+)", ctype, flags=re.I)
+    if m:
+        enc = m.group(1).strip().strip('"').strip("'")
+
+    # 2) Else requests' detected encoding (may be wrong but we try)
+    if not enc:
+        enc = r.encoding or None
+
+    # 3) Decode with fallback
+    tried = []
+    for candidate in [enc, "utf-8", "windows-1252", "latin-1"]:
+        if not candidate:
+            continue
+        if candidate in tried:
+            continue
+        tried.append(candidate)
+        try:
+            txt = raw.decode(candidate, errors="strict")
+            return fix_mojibake(txt)
+        except Exception:
+            continue
+
+    # 4) Last resort: permissive utf-8
+    return fix_mojibake(raw.decode("utf-8", errors="replace"))
+
+def write_json_atomic(path: Path, data: dict):
+    """
+    Atomic UTF-8 JSON write (prevents partial files and keeps encoding correct).
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    txt = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    tmp.write_text(txt, encoding="utf-8", newline="\n")
+    tmp.replace(path)
+
 
 
 def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
@@ -33,6 +112,8 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
       - 'catalogue_to_skip_in_source' : set[str]
       - 'group_by_property'           : str | None
       - 'group_by_values'             : list[dict]
+      - 'conforms_to'                 : set[str]
+      - 'last_modified_settings'      : str | None
     """
 
     # Build an rdflib Namespace instance for each configured prefix.
@@ -44,13 +125,14 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
     if not SYNC_ID:
         err = "SYNC_ID is not set (neither via --sync-id nor config.SYNC_ID)."
         print(f"❌ {err}")
-        # override=None (no override), SYNC_ID=None, settings with error, exit code=2
         return None, None, {
             "error": err,
             "catalogue_to_sync_in_source": [],
             "catalogue_to_skip_in_source": [],
             "group_by_property": None,
-            "group_by_values": []
+            "group_by_values": [],
+            "conforms_to": [],
+            "last_modified_settings": None,
         }, 2
 
     print(f'\n🔄 Starting fetching Sync settings from {URL_SETTINGS_FDP} (sync_id={SYNC_ID})')
@@ -61,12 +143,17 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
         """
         Fetch a Turtle document from `url` and parse it into an rdflib.Graph.
         Returns None if the request or parse fails.
+
+        Important: decode bytes robustly to avoid mojibake (UTF-8 decoded as latin-1).
         """
         try:
             r = requests.get(url, headers=headers, timeout=getattr(config, "TIMEOUT", 30))
             r.raise_for_status()
+
+            ttl_text = _decode_response_bytes(r)
+
             g = rdflib.Graph()
-            g.parse(data=r.text, format="turtle")
+            g.parse(data=ttl_text, format="turtle")
             return g
         except Exception as e:
             print(f"⚠️ Fetch failed {url}: {e}")
@@ -77,37 +164,37 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
     if root_g is None:
         err = f"Error fetching sync settings from {URL_SETTINGS_FDP}."
         print(f"❌ {err}")
-        # We cannot continue if the root fails; return error + exit code=2
         return None, SYNC_ID, {
             "error": err,
             "catalogue_to_sync_in_source": [],
             "catalogue_to_skip_in_source": [],
             "group_by_property": None,
-            "group_by_values": []
+            "group_by_values": [],
+            "conforms_to": [],
+            "last_modified_settings": None,
         }, 2
 
     # Candidates that may contain TECHNICAL:sync resources:
-    #   1. the root URL itself
-    #   2. any TECHNICAL:sync links mentioned on the FAIRDataPoint root
     candidates = [URL_SETTINGS_FDP]
     try:
         for fdp_root in root_g.subjects(RDF.type, FDP.FAIRDataPoint):
             for o in root_g.objects(fdp_root, TECHNICAL.sync):
                 candidates.append(str(o))
     except Exception:
-        # If the root isn't an FDP, or the properties are missing, we silently ignore.
         pass
 
     # De-duplicate candidate URLs while preserving order
     seen = set()
     candidates = [u for u in candidates if not (u in seen or seen.add(u))]
 
-    # RDF-only defaults (these will be overridden by RDF if present)
+    # RDF-only defaults
     sync_settings = {
         'catalogue_to_sync_in_source': set(),
         'catalogue_to_skip_in_source': set(),
         'group_by_property': None,
         'group_by_values': [],
+        'conforms_to': set(),            # ✅ NEW
+        'last_modified_settings': None,  # ✅ normalize default
     }
 
     # Whether RDF defines explicit include/skip lists
@@ -131,7 +218,7 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
             continue
 
         found_sync_id = True
-        sync_res = subjects[0]  # First match wins (consistent with previous behaviour)
+        sync_res = subjects[0]
 
         # URIs of catalogues to include/skip on the source FDP
         URIToSyncAtSource = {str(o) for o in g.objects(sync_res, TECHNICAL.resourceToSyncAtSource)}
@@ -143,9 +230,15 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
             override_config_sync_resource = True
             print(f"🔧 Using sync include/skip from {sync_url}")
 
+        # ✅ NEW: capture all TECHNICAL:conformsTo values from settings
+        conforms_to = {str(o) for o in g.objects(sync_res, TECHNICAL.conformsTo)}
+        if conforms_to:
+            sync_settings['conforms_to'] = conforms_to
+            print(f"📌 Found {len(conforms_to)} TECHNICAL.conformsTo value(s) in {sync_url}")
 
         last_modified_settings = next(g.objects(sync_res, TECHNICAL.modified), None)
-        sync_settings['last_modified_settings'] = str(last_modified_settings)
+        if last_modified_settings is not None:
+            sync_settings['last_modified_settings'] = str(last_modified_settings)
 
         # --- Extract groupBy property + values if defined ---
 
@@ -196,7 +289,9 @@ def define_sync_settings(URL_SETTINGS_FDP, SYNC_ID):
             "catalogue_to_sync_in_source": [],
             "catalogue_to_skip_in_source": [],
             "group_by_property": None,
-            "group_by_values": []
+            "group_by_values": [],
+            "conforms_to": [],
+            "last_modified_settings": None,
         }, 2
 
     # We found a matching sync resource but it didn't define sync/skip lists:
@@ -258,13 +353,15 @@ def main():
         "catalogue_to_skip_in_source": sorted(list(settings.get("catalogue_to_skip_in_source", []))),
         "group_by_property": settings.get("group_by_property"),
         "group_by_values": settings.get("group_by_values", []),
-        "last_modified_settings": settings.get("last_modified_settings")
+        "conforms_to": sorted(list(settings.get("conforms_to", []))),  # ✅ NEW
+        "last_modified_settings": settings.get("last_modified_settings"),
     }
     if "error" in settings:
         out["error"] = settings["error"]
 
     # Write JSON to disk
-    Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    out = deep_fix(out)
+    write_json_atomic(Path(args.out), out)
     print(f"🧩 Wrote sync settings to {args.out}")
 
     # Exit code mirrors define_sync_settings

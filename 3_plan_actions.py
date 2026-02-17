@@ -69,14 +69,15 @@ def load_sync_settings(path: Path) -> dict:
 
     Returns a dict with:
       - "group_by_property": IRI of the group-by property (or None)
-      - "group_by_values": list of entries:
-          [{ "value_uri": "...", "titleEn": "...", "titleFr": "...", "titleNl": "...", ... }]
+      - "group_by_values": list of entries
       - "last_modified_settings": ISO datetime string (or None)
+      - "conforms_to": list[str]  (optional filter list from TECHNICAL:conformsTo)
     """
     out = {
         "group_by_property": None,
         "group_by_values": [],  # [{value_uri, titleEn, titleFr, titleNl, ...}]
         "last_modified_settings": None,
+        "conforms_to": [],      # ✅ NEW
     }
     if not path or not path.exists():
         return out
@@ -85,6 +86,12 @@ def load_sync_settings(path: Path) -> dict:
         out["group_by_property"] = j.get("group_by_property")
         out["group_by_values"] = j.get("group_by_values", []) or []
         out["last_modified_settings"] = j.get("last_modified_settings")
+
+        ct = j.get("conforms_to", []) or []
+        if isinstance(ct, str):
+            ct = [ct]
+        # normalize here once
+        out["conforms_to"] = [norm(x) for x in ct if isinstance(x, str) and x.strip()]
     except Exception as e:
         print(f"⚠️ Could not read sync settings {path}: {e}")
     return out
@@ -149,15 +156,24 @@ def _postpass_reparent(actions, source_dataset_groups, group_prop):
             suffix = "Reparented: catalog scheduled for deletion"
             a["action_note"] = f"{note} | {suffix}" if note else suffix
 
-def has_healthdcat_conforms_to(entry: dict) -> bool:
+def conforms_to_allowed(entry: dict, allowed_conforms_to: list[str]) -> bool:
     """
-    True if catalogRecord entry has dct:conformsTo containing 'healthdcat' (case-insensitive).
-    Accepts string or list in entry['conformsTo'].
+    Returns True if:
+      - allowed_conforms_to is empty -> no filtering on conformsTo (accept)
+      - OR entry.conformsTo contains at least one URI that matches allowed list
+
+    Supports entry["conformsTo"] being a string or list.
     """
+    if not allowed_conforms_to:
+        return True  # no filter configured
+
     vals = entry.get("conformsTo") or []
     if isinstance(vals, str):
         vals = [vals]
-    return any(isinstance(v, str) and "healthdcat" in v.lower() for v in vals)
+
+    entry_set = {norm(v) for v in vals if isinstance(v, str) and v.strip()}
+    allowed_set = set(allowed_conforms_to)  # already normalized by load_sync_settings
+    return bool(entry_set & allowed_set)
 
 
 def norm_status(s: str) -> str:
@@ -213,6 +229,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
     # Inputs & pre-processing
     # -----------------------------
     group_prop = sync_settings.get("group_by_property")
+    allowed_conforms_to = sync_settings.get("conforms_to") or []
     # Expect entries like {"value_uri": "...", "titleEn": "...", ...}
     expected_entries = _expected_groups(sync_settings)
     expected_set = {e["value_uri"] for e in expected_entries}
@@ -418,11 +435,11 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
         source_all_uris.add(uri)
         status = norm_status(e.get("status"))
         if should_publish(status):
-            # ✅ NEW: only publish/sync datasets that conform to HealthDCAT-* (substring match)
-            if has_healthdcat_conforms_to(e):
+            # ✅ NEW: only publish/sync datasets that match syncSettings.conforms_to (if provided)
+            if conforms_to_allowed(e, allowed_conforms_to):
                 source_public_by_uri[uri] = e
             else:
-                # Not eligible for sync → treat as "hold" (do not create/update, do not delete)
+                # Not eligible for sync → HOLD (do not create/update, do not delete)
                 pass
 
         elif should_delete_from_target(status):

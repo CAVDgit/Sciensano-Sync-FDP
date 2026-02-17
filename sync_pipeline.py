@@ -18,10 +18,20 @@ Each run gets its own timestamped folder under data/sync/<RUN_ID>.
 Publication policy (SOURCE status -> TARGET behavior)
 
 We treat the TARGET as a "sticky public mirror":
-  - PUBLIC  : publish to target (create if missing, update if source is newer)
-  - DRAFT   : do NOT publish changes, but do NOT delete if already published
-  - REVIEW  : same as DRAFT (hold on target; keep last published snapshot)
-  - INTRANET: remove from target (delete, including any children if applicable)
+
+  - PUBLIC
+      Publish to target (create if missing, update if source is newer),
+      BUT only if it matches the optional TECHNICAL:conformsTo filter
+      defined in the sync settings (see below).
+
+  - DRAFT
+      Do NOT publish changes, but do NOT delete if already published.
+
+  - REVIEW
+      Same as DRAFT (hold on target; keep last published snapshot).
+
+  - INTRANET
+      Remove from target (delete, including any children if applicable).
 
 Rationale:
   Updating a resource in the source FDP often transitions it to DRAFT/REVIEW
@@ -29,10 +39,39 @@ Rationale:
   (delete/recreate) during that approval cycle. Only INTRANET means the
   resource must no longer be exposed on the public target.
 
-Notes:
+ ---------------------------------------------------------------------------
+
+TECHNICAL:conformsTo filter (sync settings driven)
+
+Step 1 may define one or more TECHNICAL:conformsTo values on the
+TECHNICAL:sync resource.
+
+These values act as an additional publication constraint:
+
+  - They MUST match the dct:conformsTo value(s) of the dataset’s
+    dcat:CatalogRecord (not the dataset’s own dct:conformsTo).
+
+  - Only PUBLIC datasets whose catalogue record dct:conformsTo
+    intersects the TECHNICAL:conformsTo list are eligible for sync.
+
+  - If no TECHNICAL:conformsTo values are defined in the sync settings,
+    then no conformsTo filtering is applied and all PUBLIC datasets
+    are eligible (subject to status rules above).
+
+This mechanism allows a single source FDP to expose multiple metadata
+profiles (e.g. HealthDCAT-AP, DCAT-AP, internal profiles), while a
+given sync configuration publishes only the datasets whose catalogue
+records conform to the desired profile(s).
+
+ ---------------------------------------------------------------------------
+
+Additional notes:
+
   - Resources missing on source are still cleaned up on target.
-  - Child resources (distribution/sample/analytics) follow the same policy,
-    and are also held when their parent dataset is held.
+  - Child resources (distribution/sample/analytics) follow the same
+    publication policy as their parent dataset.
+  - If a parent dataset is held or deleted, children are held or
+    cascade-deleted accordingly.
 """
 
 
