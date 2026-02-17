@@ -304,11 +304,15 @@ def build_log_dataset_ttl(actions_json_path: str, base_iri: str,
 
     # Namespaces for this run
     BASE = rdflib.Namespace(base_iri.rstrip("/") + "/")
-    ACT  = rdflib.Namespace(str(BASE) + "action/")
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")  # e.g. 20260217T141310Z
+    log_uri = rdflib.URIRef(str(BASE) + "logs/" + run_id)
+
+    # /logs/<run_id>/action/<idx>
+    ACT = rdflib.Namespace(str(log_uri).rstrip("/") + "/action/")
 
     # Main log dataset URI = <base>/logs/<timestamp>
     now_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    log_uri = rdflib.URIRef(str(BASE) + "logs/" + now_ts)
 
     # Main log dataset type + core metadata
     g.add((log_uri, RDF.type, TECHNICAL.Logs))
@@ -364,11 +368,6 @@ def build_log_dataset_ttl(actions_json_path: str, base_iri: str,
         add_lit(action_uri, TECHNICAL.actionNote,      a.get("action_note"))
 
         # Outcome fields
-        # NOTE: TECHNICAL.syncStatus is used twice:
-        #   - once for any explicit sync_status
-        #   - once for the boolean "success"
-        # If you prefer, you could split into TECHNICAL.success vs TECHNICAL.syncStatus later.
-        add_lit(action_uri, TECHNICAL.syncStatus,      a.get("sync_status"))
         add_lit(action_uri, TECHNICAL.syncStatus,      a.get("success"))
         add_lit(action_uri, TECHNICAL.syncedAt,        a.get("sync_time"))
         add_lit(action_uri, TECHNICAL.contentFetchedAt, a.get("content_fetched_at"), XSD.dateTime)
@@ -395,8 +394,8 @@ def parse_args():
     ap.add_argument("--actions", required=True, help="Path to actionsOnTargetFDP.json")
     ap.add_argument(
         "--base",
-        default="http://healthdataportal.eu/syncFDP/",
-        help="Base IRI for run/action resources (default: http://healthdataportal.eu/syncFDP/)",
+        default=config.NAMESPACES["TECHNICAL"],
+        help="Base IRI for run/action resources (default: TECHNICAL namespace)",
     )
     ap.add_argument("--no-publish", action="store_true", help="Do not publish to FDP; only print TTL")
     ap.add_argument("--status", default=None, help="Short status tag to embed (e.g., OK, NO_ACTIONS, ERROR)")
