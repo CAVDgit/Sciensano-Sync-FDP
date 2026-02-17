@@ -86,6 +86,7 @@ def get_token():
     res.raise_for_status()
     return res.json()["token"]
 
+
 def create_metadata(class_metadata: str, token: str, rdf_content: str) -> Tuple[bool, int | None, str, str | None]:
     """
     POST a new resource to the TARGET FDP:

@@ -331,6 +331,7 @@ def plan_actions(source, target, sync_settings: dict, only_type=None):
                 keep = candidates_sorted[0]
                 canonical_by_value[vu] = keep
 
+
                 # Delete extras
                 for dup in candidates_sorted[1:]:
                     actions.append({

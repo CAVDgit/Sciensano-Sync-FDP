@@ -5,7 +5,7 @@ This version reads all variables from environment variables (.env or docker-comp
 No hardcoded defaults — the script will raise an error if something required is missing.
 """
 # Global version of the code
-VERSION = "1.1"
+VERSION = "1.2"
 
 import os
 import json

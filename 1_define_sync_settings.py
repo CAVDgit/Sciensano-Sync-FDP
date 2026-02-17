@@ -345,6 +345,7 @@ def main():
     # Call core logic
     override, _sync_id, settings, rc = define_sync_settings(sync_url, sync_id)
 
+
     # Normalise settings into a JSON-serialisable dict for output
     out = {
         "override": bool(override) if override is not None else False,

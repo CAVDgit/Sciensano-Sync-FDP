@@ -12,6 +12,7 @@ Step 2: Harvest source/target FDPs and produce JSON files consumed by later step
 Output (per role) is a JSON array (list of dicts) with extracted metadata.
 """
 
+
 import requests
 import rdflib
 from urllib.parse import urlparse

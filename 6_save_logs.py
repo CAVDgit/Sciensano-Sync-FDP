@@ -274,7 +274,6 @@ def prune_sync_folders(sync_dir: str, keep: int) -> int:
     return deleted
 
 
-
 # ---------- RDF build ----------
 
 def build_log_dataset_ttl(actions_json_path: str, base_iri: str,

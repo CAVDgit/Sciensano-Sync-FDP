@@ -461,6 +461,7 @@ def prepare_rdf(class_metadata: str,
     # Preserve type of main resource
     finalg.add((finalURI, rdflib.RDF.type, class_type))
 
+
     # Track original URI as adms:Identifier
     id_node_iri = rdflib.URIRef(f"{str(classURI)}#admsIdentifier")
     finalg.add((finalURI, ADMS.identifier, id_node_iri))
