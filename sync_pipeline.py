@@ -291,7 +291,6 @@ def main():
         [
             sys.executable, STEP6,
             "--actions", str(ACTIONS_JSON),
-            "--base", "http://healthdataportal.eu/syncFDP/",
             "--status", status,
             "--prune",
             "--keep", str(config.LAST_LOGS_TO_KEEP),

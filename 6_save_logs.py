@@ -276,8 +276,7 @@ def prune_sync_folders(sync_dir: str, keep: int) -> int:
 
 # ---------- RDF build ----------
 
-def build_log_dataset_ttl(actions_json_path: str, base_iri: str,
-                          status: Optional[str], note: Optional[str]) -> str:
+def build_log_dataset_ttl(actions_json_path: str, status: Optional[str], note: Optional[str]) -> str:
     """
     Build a TECHNICAL.Logs dataset as Turtle, describing:
       - the sync run (identifier, created, status, note)
@@ -302,8 +301,9 @@ def build_log_dataset_ttl(actions_json_path: str, base_iri: str,
 
     g = rdflib.Graph()
 
-    # Namespaces for this run
-    BASE = rdflib.Namespace(base_iri.rstrip("/") + "/")
+    base_str = str(TECHNICAL)
+    base_path = base_str[:-1] if base_str.endswith("#") else base_str.rstrip("/")
+    BASE = rdflib.Namespace(base_path + "/")
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")  # e.g. 20260217T141310Z
     log_uri = rdflib.URIRef(str(BASE) + "logs/" + run_id)
@@ -316,10 +316,10 @@ def build_log_dataset_ttl(actions_json_path: str, base_iri: str,
 
     # Main log dataset type + core metadata
     g.add((log_uri, RDF.type, TECHNICAL.Logs))
-    g.add((log_uri, DCT.identifier, rdflib.Literal(now_ts)))
+    g.add((log_uri, DCT.identifier, rdflib.Literal(run_id)))
     g.add((log_uri, DCT.title, rdflib.Literal(f"sync-{now_ts}")))
     g.add((log_uri, TECHNICAL.created, rdflib.Literal(now_ts, datatype=XSD.dateTime)))
-    g.add((log_uri, RDFS.label, rdflib.Literal(f"Sync FDP Dataset run {now_ts}")))
+    g.add((log_uri, RDFS.label, rdflib.Literal(f"Sync FDP Dataset run {run_id}")))
 
     # Parent logs catalogue (point to the logs FDP root or dedicated catalogue)
     try:
@@ -392,11 +392,6 @@ def parse_args():
         description="Step 6: Build logs TTL, publish to FDP, then prune old logs."
     )
     ap.add_argument("--actions", required=True, help="Path to actionsOnTargetFDP.json")
-    ap.add_argument(
-        "--base",
-        default=config.NAMESPACES["TECHNICAL"],
-        help="Base IRI for run/action resources (default: TECHNICAL namespace)",
-    )
     ap.add_argument("--no-publish", action="store_true", help="Do not publish to FDP; only print TTL")
     ap.add_argument("--status", default=None, help="Short status tag to embed (e.g., OK, NO_ACTIONS, ERROR)")
     ap.add_argument("--note", default=None, help="Optional free-text note to embed in the log")
@@ -420,7 +415,7 @@ def main():
     args = parse_args()
 
     # Build TTL for this run
-    ttl = build_log_dataset_ttl(args.actions, args.base, args.status, args.note)
+    ttl = build_log_dataset_ttl(args.actions, args.status, args.note)
 
     if args.no_publish:
         # Just print TTL to stdout (debug / development mode)
