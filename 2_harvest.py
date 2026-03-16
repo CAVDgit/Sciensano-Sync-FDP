@@ -254,7 +254,7 @@ def harvest_fdp(
                 #  - FOAF.primaryTopic: dataset
                 #  - TECHNICAL.childfOfPrimaryTopic: distributions/samples/analytics
                 dataset_uris = list(catalogueRecordStore.objects(record_uri, FOAF.primaryTopic))
-                child_uris   = list(catalogueRecordStore.objects(record_uri, TECHNICAL.childfOfPrimaryTopic))
+                child_uris   = list(catalogueRecordStore.objects(record_uri, FOAF.childOfPrimaryTopic))
                 record_conforms = {
                     str(o)
                     for o in catalogueRecordStore.objects(record_uri, DCT.conformsTo)
