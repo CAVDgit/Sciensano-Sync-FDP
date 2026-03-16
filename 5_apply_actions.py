@@ -259,7 +259,91 @@ def update_isPartOf_in_rdf(actions_item: dict, payloads_dir: Path) -> bool:
     print(f"[isPartOf] OK: added dct:isPartOf → {parent_target_uri} in {actions_item.get('content')}")
     return True
 
+
+
+def build_source_to_target_map_from_actions(actions: list[dict]) -> dict[str, str]:
+    """
+    Build a best-effort mapping of source_uri -> target_uri from the current action list.
+
+    Useful after CREATEs, when newly published target URIs become known and can be
+    used to patch other payloads that still contain publishable source URIs.
+    """
+    mapping: dict[str, str] = {}
+    for a in actions:
+        src = a.get("source_uri")
+        tgt = a.get("target_uri")
+        if src and tgt:
+            mapping[str(src)] = str(tgt)
+    return mapping
+
+def fetch_metadata(uri: str, token: str):
+    """
+    GET an existing metadata resource from target as Turtle.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "text/turtle",
+    }
+    try:
+        r = requests.get(
+            uri,
+            headers=headers,
+            timeout=getattr(config, "TARGET_TIMEOUT", config.TIMEOUT),
+        )
+        return r.ok, r.status_code, r.text
+    except requests.RequestException as e:
+        return False, None, str(e)
+
+def patch_internal_refs_in_ttl_text(
+    ttl_text: str,
+    unresolved_refs: list[dict],
+    source_to_target_map: dict[str, str]
+) -> tuple[str, int]:
+    """
+    Patch Turtle content in memory by replacing object URIs listed in
+    unresolved_publishable_refs with their corresponding target URIs.
+
+    Rules:
+      - only object URIRefs are translated
+      - only if they are listed in unresolved_refs
+      - never translate triples inside adms:identifier traceability structures
+
+    Returns:
+      (patched_ttl_text, replacement_count)
+    """
+    wanted = {
+        str(r.get("source_object_uri"))
+        for r in (unresolved_refs or [])
+        if r.get("source_object_uri")
+    }
+    if not wanted:
+        return ttl_text, 0
+
+    g = rdflib.Graph()
+    g.parse(data=ttl_text, format="turtle")
+
+    identifier_nodes = set(g.objects(None, ADMS.identifier))
+    replacement_count = 0
+    newg = rdflib.Graph()
+
+    for s, p, o in g:
+        if (
+            isinstance(o, rdflib.URIRef)
+            and p != ADMS.identifier
+            and s not in identifier_nodes
+            and str(o) in wanted
+            and str(o) in source_to_target_map
+        ):
+            o = rdflib.URIRef(source_to_target_map[str(o)])
+            replacement_count += 1
+        newg.add((s, p, o))
+
+    ttl_bytes = newg.serialize(format="turtle", encoding="utf-8")
+    return ttl_bytes.decode("utf-8"), replacement_count
+
 # -------- Actions wrappers --------
+
+
 
 def action_delete(a, token):
     """
@@ -336,6 +420,8 @@ def action_update(a, token, payloads_dir: Path):
         a["sync_note"] = f"Update failed ({code}): {body[:200] if isinstance(body,str) else body}"
         a["success"] = False
         return False
+
+
 
 # -------- CLI / Main --------
 
@@ -630,6 +716,104 @@ def main():
                 if args.stop_on_error and not ok:
                     break
 
+
+    # 3) FIXUP UPDATEs for payloads that still contained unresolved publishable refs
+    if (failed == 0 or not args.stop_on_error):
+        source_to_target_map = build_source_to_target_map_from_actions(actions_sorted)
+        fixup_total = 0
+        fixup_failed = 0
+
+        for a in actions_sorted:
+            refs = a.get("unresolved_publishable_refs") or []
+            if not refs:
+                continue
+
+            if not a.get("target_uri"):
+                a["fixup_note"] = "Skipped fixup: target_uri not known yet."
+                continue
+
+            if not a.get("success"):
+                a["fixup_note"] = "Skipped fixup: initial create/update was not successful."
+                continue
+
+            unresolved_now = [
+                r for r in refs
+                if r.get("source_object_uri") and r.get("source_object_uri") not in source_to_target_map
+            ]
+            if unresolved_now:
+                a["fixup_note"] = (
+                    f"Deferred fixup: {len(unresolved_now)} unresolved publishable reference(s) still have no target URI."
+                )
+                continue
+
+            if args.dry_run:
+                print(
+                    f"🔁 [fixup {fixup_total+1}] (dry-run) patch internal refs for {a.get('target_uri')}"
+                )
+                a["fixup_success"] = True
+                a["fixup_note"] = "Dry-run: fixup update would be applied."
+                fixup_total += 1
+                continue
+
+            try:
+                ok_fetch, code_fetch, fetched_ttl = fetch_metadata(a["target_uri"], token)
+                if not ok_fetch:
+                    a["fixup_success"] = False
+                    a["fixup_note"] = f"Fixup fetch failed ({code_fetch}): {fetched_ttl[:200] if isinstance(fetched_ttl, str) else fetched_ttl}"
+                    a["success"] = False
+                    failed += 1
+                    fixup_failed += 1
+                    print(f"❌ [fixup {fixup_total+1}] fetch failed for {a.get('target_uri')}: {a['fixup_note']}")
+                    if args.stop_on_error:
+                        break
+                    continue
+
+                patched_ttl, replaced = patch_internal_refs_in_ttl_text(
+                    fetched_ttl,
+                    refs,
+                    source_to_target_map
+                )
+
+            except Exception as e:
+                a["fixup_success"] = False
+                a["fixup_note"] = f"Fixup patch failed: {e}"
+                a["success"] = False
+                failed += 1
+                fixup_failed += 1
+                print(f"❌ [fixup {fixup_total+1}] patch failed for {a.get('target_uri')}: {e}")
+                if args.stop_on_error:
+                    break
+                continue
+
+            if replaced == 0:
+                a["fixup_success"] = True
+                a["fixup_note"] = "No fixup update needed; no replaceable internal refs found in fetched target RDF."
+                continue
+
+            print(
+                f"🔁 [fixup {fixup_total+1}] UPDATE {a.get('target_uri')} "
+                f"({replaced} internal ref replacement(s))"
+            )
+            ok, code_upd, body_upd = update_metadata(a["target_uri"], token, patched_ttl)
+            a["fixup_success"] = ok
+
+            if ok:
+                a["fixup_note"] = f"Successfully applied fixup update ({replaced} internal ref replacement(s))."
+                print(f"✅ [fixup {fixup_total+1}] updated {a.get('target_uri')}")
+            else:
+                a["fixup_note"] = f"Fixup update failed ({code_upd}) after {replaced} replacement(s): {body_upd[:200] if isinstance(body_upd, str) else body_upd}"
+                a["success"] = False
+                failed += 1
+                fixup_failed += 1
+                print(f"❌ [fixup {fixup_total+1}] FAILED {a.get('target_uri')}  note={a.get('fixup_note')}")
+                if args.stop_on_error:
+                    break
+
+            fixup_total += 1
+
+        if fixup_total:
+            print(f"🔧 Fixup updates attempted: {fixup_total}, failures: {fixup_failed}")
+
     # Persist updated actions back to disk
     for a in actions_sorted:
         if "success" not in a:
@@ -645,6 +829,9 @@ def main():
         f"Update: {counts['update']}/{total_update}  "
         f"Delete: {counts['delete']}/{total_delete}"
     )
+    fixup_attempted = sum(1 for a in actions_sorted if a.get("fixup_success") is not None)
+    fixup_ok = sum(1 for a in actions_sorted if a.get("fixup_success") is True)
+    print(f"Fixup:   {fixup_ok}/{fixup_attempted}")
     print(f"Failures: {failed}")
     print("=========================================")
 

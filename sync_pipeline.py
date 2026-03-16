@@ -111,7 +111,7 @@ SYNC_JSON   = RUN_DIR / "syncSettings.json"       # Step 1 output
 SOURCE_JSON = RUN_DIR / "sourceFDP.json"          # Step 2 output (source)
 TARGET_JSON = RUN_DIR / "targetFDP.json"          # Step 2 output (target)
 ACTIONS_JSON= RUN_DIR / "actionsOnTargetFDP.json" # Step 3 output (actions)
-
+PUBLISHABLE_URIS_JSON = RUN_DIR / "publishableSourceUris.json"
 
 def run_step(name, cmd, must_pass=True):
     """
@@ -300,8 +300,17 @@ def main():
     )
 
     # Final summary of artefacts for this run
-    print("\n🎉 Pipeline finished (logs attempted regardless of prior failures).")
-    print(f"🧾 Artifacts:\n  - {SOURCE_JSON}\n  - {TARGET_JSON}\n  - {ACTIONS_JSON}\n  - {PAYLOADS_DIR}")
+    print(
+        "\n🎉 Pipeline finished (logs attempted regardless of prior failures)."
+    )
+    print(
+        f"🧾 Artifacts:\n"
+        f"  - {SOURCE_JSON}\n"
+        f"  - {TARGET_JSON}\n"
+        f"  - {ACTIONS_JSON}\n"
+        f"  - {PUBLISHABLE_URIS_JSON}\n"
+        f"  - {PAYLOADS_DIR}"
+    )
 
 if __name__ == "__main__":
     main()

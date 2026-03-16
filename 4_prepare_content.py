@@ -41,6 +41,8 @@ def parse_args():
     p.add_argument("--out-dir", required=True, help="Directory to write cleaned TTL payloads")
     p.add_argument("--target-url", default=None,
                    help="Target FDP base URL (defaults to config.URL_TARGET_FDP)")
+    p.add_argument("--publishable-source-uris", default=None,
+                   help="Optional path to publishableSourceUris.json from step 3")
     p.add_argument("--inline", action="store_true",
                    help="Store cleaned TTL inline in actions JSON instead of external files")
     return p.parse_args()
@@ -234,6 +236,112 @@ def find_parents_class(fdpURL):
 
     return source_target_mapping
 
+
+def is_source_fdp_uri(uri: str) -> bool:
+    """
+    True if the given URI belongs to the SOURCE FDP base URL.
+    """
+    base = str(getattr(config, "URL_SOURCE_FDP", "") or "").rstrip("/")
+    return bool(base) and str(uri).startswith(base)
+
+
+def resolve_target_uri_from_source(source_uri: str, source_target_mapping: dict) -> str | None:
+    """
+    Resolve a SOURCE FDP URI to the corresponding TARGET FDP URI
+    using the existing mapping structure:
+        {target_uri: [identifier1, identifier2, ...]}
+    """
+    src = str(source_uri)
+    for target_uri, identifiers in (source_target_mapping or {}).items():
+        if src in [str(v) for v in (identifiers or [])]:
+            return str(target_uri)
+    return None
+
+
+def load_publishable_source_uris(path: Path | None) -> set[str]:
+    """
+    Load the companion JSON emitted by Step 3 and return a set of source URIs
+    expected to exist on target in this run.
+    """
+    if not path or not path.exists():
+        return set()
+    try:
+        j = json.loads(path.read_text(encoding="utf-8"))
+        vals = j.get("publishable_source_uris", []) if isinstance(j, dict) else []
+        return {str(v).strip().rstrip("/") for v in vals if isinstance(v, str) and v.strip()}
+    except Exception as e:
+        print(f"⚠️ Could not read publishable source URIs {path}: {e}")
+        return set()
+
+
+def merge_source_target_mappings(base_mapping: dict, extra_mapping: dict) -> dict:
+    """
+    Merge two mappings of the shape:
+        {target_uri: [source_uri_1, source_uri_2, ...]}
+
+    Values are de-duplicated and normalized with trailing slash removed.
+    """
+    merged: dict[str, list[str]] = {}
+
+    def _add(target_uri, values):
+        tgt = str(target_uri).strip()
+        if not tgt:
+            return
+        bucket = merged.setdefault(tgt, [])
+        seen = {str(v) for v in bucket}
+        for v in (values or []):
+            sv = str(v).strip()
+            if not sv or sv in seen:
+                continue
+            bucket.append(sv)
+            seen.add(sv)
+
+    for k, vals in (base_mapping or {}).items():
+        _add(k, vals)
+    for k, vals in (extra_mapping or {}).items():
+        _add(k, vals)
+    return merged
+
+
+def load_target_harvest_mapping(path: Path | None) -> dict:
+    """
+    Load targetFDP.json harvested in Step 2 and convert it to the same mapping shape as
+    find_parents_class():
+        {target_uri: [source_uri_1, source_uri_2, ...]}
+
+    This helps resolve pre-existing target resources that may not be discoverable via
+    live traversal of the target FDP in find_parents_class().
+    """
+    if not path or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"⚠️ Could not read harvested target mapping {path}: {e}")
+        return {}
+
+    out: dict[str, list[str]] = {}
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict):
+            continue
+        target_uri = str(item.get("target_uri") or "").strip()
+        if not target_uri:
+            continue
+
+        vals = item.get("source_uri")
+        if isinstance(vals, str):
+            values = [vals]
+        elif isinstance(vals, list):
+            values = [v for v in vals if isinstance(v, str)]
+        else:
+            values = []
+
+        values = [v.strip().rstrip("/") for v in values if v.strip()]
+        if values:
+            out[target_uri] = values
+
+    return out
+
 # -------------- RDF cleaning --------------
 
 def prepare_rdf(class_metadata: str,
@@ -324,6 +432,9 @@ def prepare_rdf(class_metadata: str,
         o for o in tmp.objects(classURI, DCT.conformsTo)
         if "/profile/" in str(o)
     }
+
+    # Protect adms:identifier traceability structures from URI translation
+    identifier_nodes = set(tmp.objects(None, ADMS.identifier))
 
     # Identify bare bnodes used for publisher/rights (only rdf:type)
     bare_pub_rights = set()
@@ -437,6 +548,21 @@ def prepare_rdf(class_metadata: str,
                             # Unknown child on target; drop the link
                             continue
 
+        # Generic immediate translation of internal SOURCE FDP object URIs
+        # - only object URIs
+        # - only if they start with URL_SOURCE_FDP
+        # - never inside adms:identifier traceability structures
+        # - only when the referenced source URI already has a target URI
+        if (
+            isinstance(o, rdflib.URIRef)
+            and p != ADMS.identifier
+            and s not in identifier_nodes
+            and is_source_fdp_uri(str(o))
+        ):
+            mapped_target = resolve_target_uri_from_source(str(o), source_target_mapping)
+            if mapped_target:
+                o = rdflib.URIRef(mapped_target)
+
         filtered.add((s, p, o))
 
     # --------- Replace main subject on create/update ---------
@@ -484,6 +610,10 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Optional companion file from Step 3 listing source URIs expected on target
+    publishable_path = Path(args.publishable_source_uris) if args.publishable_source_uris else (actions_path.parent / "publishableSourceUris.json")
+    publishable_source_uris = load_publishable_source_uris(publishable_path)
+
     # Determine target URL (used for catalog isPartOf and mapping)
     target_url = args.target_url or (config.URL_TARGET_FDP if getattr(config, "URL_TARGET_FDP", "") else None)
 
@@ -491,6 +621,18 @@ def main():
     source_target_mapping = {}
     if target_url:
         source_target_mapping = find_parents_class(target_url)
+
+    # Supplement the live mapping with the harvested target JSON from Step 2.
+    # This helps resolve pre-existing target resources that are present in targetFDP.json
+    # but are not discovered by live traversal in find_parents_class().
+    target_harvest_path = actions_path.parent / "targetFDP.json"
+    harvested_target_mapping = load_target_harvest_mapping(target_harvest_path)
+    if harvested_target_mapping:
+        source_target_mapping = merge_source_target_mappings(source_target_mapping, harvested_target_mapping)
+        print(f"🧭 Loaded {len(harvested_target_mapping)} harvested target mapping entr{'y' if len(harvested_target_mapping)==1 else 'ies'} from {target_harvest_path}")
+
+    if publishable_source_uris:
+        print(f"🧷 Loaded {len(publishable_source_uris)} publishable source URI(s) from {publishable_path}")
 
     # Load actions JSON
     try:
@@ -508,6 +650,8 @@ def main():
         act = (action.get("action") or "").lower()
         typ = (action.get("type") or "")
         source_uri = action.get("source_uri")
+        action.pop("unresolved_publishable_refs", None)
+        action.pop("unresolved_publishable_refs_scan_error", None)
 
         # If Step 3 attached this dataset to a catalog that is now scheduled for deletion,
         # clear the parent and mark the action as delayed so that Step 3's group-by logic
@@ -666,6 +810,42 @@ def main():
                         typ, act, raw_ttl, now_iso, source_target_mapping, target_url
                     )
 
+                    # Detect internal SOURCE FDP URIs that are publishable in this run
+                    # but do not yet have a corresponding target URI.
+                    unresolved_publishable_refs = []
+                    try:
+                        g_check = rdflib.Graph()
+                        g_check.parse(data=cleaned_ttl, format="turtle")
+                        identifier_nodes_check = set(g_check.objects(None, ADMS.identifier))
+                        seen_refs = set()
+                        for s_chk, p_chk, o_chk in g_check:
+                            if not isinstance(o_chk, rdflib.URIRef):
+                                continue
+                            o_str = str(o_chk)
+                            if p_chk == ADMS.identifier or s_chk in identifier_nodes_check:
+                                continue
+                            if not is_source_fdp_uri(o_str):
+                                continue
+                            if not publishable_source_uris:
+                                continue
+                            if o_str not in publishable_source_uris:
+                                continue
+                            if resolve_target_uri_from_source(o_str, source_target_mapping):
+                                continue
+                            key = (str(p_chk), o_str)
+                            if key in seen_refs:
+                                continue
+                            seen_refs.add(key)
+                            unresolved_publishable_refs.append({
+                                "predicate": str(p_chk),
+                                "source_object_uri": o_str
+                            })
+                    except Exception as e:
+                        action["unresolved_publishable_refs_scan_error"] = str(e)
+
+                    if unresolved_publishable_refs:
+                        action["unresolved_publishable_refs"] = unresolved_publishable_refs
+
                     # Cleanup globals to avoid leaking context
                     globals().pop("CURRENT_ACTION_PARENT_TARGET_URI", None)
                     globals().pop("CURRENT_ACTION_GROUP_VALUE_URI", None)
@@ -679,7 +859,10 @@ def main():
                         if typ in ("dataset", "distribution", "sample", "analytics") and not action.get("parent_target_uri"):
                             action["parent_target_uri"] = None
                             action["action_delayed"] = True
-                    print("   ↳ fetched and cleaned")
+                    if action.get("unresolved_publishable_refs"):
+                        print(f"   ↳ fetched and cleaned ({len(action['unresolved_publishable_refs'])} unresolved publishable ref(s) kept as source URI for now)")
+                    else:
+                        print("   ↳ fetched and cleaned")
                 except Exception as e:
                     # Transform errors are stored on the action
                     action["transform_error"] = f"transform failed: {e}"

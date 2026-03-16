@@ -871,6 +871,8 @@ def main():
     parser.add_argument("--in-source", required=True, help="Path to sourceFDP.json produced by step 2")
     parser.add_argument("--in-target", required=True, help="Path to targetFDP.json produced by step 2")
     parser.add_argument("--out",       required=True, help="Where to write actionsOnTargetFDP.json")
+    parser.add_argument("--out-publishable", default=None,
+                        help="Optional: where to write publishableSourceUris.json (defaults next to --out)")
     parser.add_argument("--only-type", choices=["catalog", "dataset", "distribution", "sample", "analytics"],
                         help="Optional: restrict planning to a single type")
     parser.add_argument("--sync-settings", help="Path to syncSettings.json produced by step 1 (optional but required for group-by mode)")
@@ -900,6 +902,20 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(actions, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Companion file: source URIs expected on target in this run
+    publishable_path = Path(args.out_publishable) if args.out_publishable else (out_path.parent / "publishableSourceUris.json")
+    publishable_source_uris = sorted({
+        norm(a.get("source_uri"))
+        for a in actions
+        if (a.get("action") in {"create", "update"})
+        and a.get("source_uri")
+        and not a.get("ignored")
+    })
+    publishable_path.write_text(
+        json.dumps({"publishable_source_uris": publishable_source_uris}, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
     # Summary for human output
     counts = {"create": 0, "update": 0, "delete": 0}
     ignored = 0
@@ -912,6 +928,7 @@ def main():
     print(f"✅ Planned actions -> create: {counts['create']}, update: {counts['update']}, "
           f"delete: {counts['delete']}, ignored: {ignored}")
     print(f"🧾 Actions saved to {out_path.resolve()}")
+    print(f"🧷 Publishable source URIs saved to {publishable_path.resolve()} ({len(publishable_source_uris)})")
 
 if __name__ == "__main__":
     main()
